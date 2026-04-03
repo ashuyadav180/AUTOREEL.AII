@@ -3,13 +3,14 @@ import axios from "axios";
 
 const router = express.Router();
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
+const SCRIPT_AI_URL = process.env.SCRIPT_AI_URL || "http://127.0.0.1:8005";
+const VIDEO_AI_URL = process.env.VIDEO_AI_URL || "http://127.0.0.1:8004";
 
 // POST /api/ai/suggestions
 router.post("/suggestions", async (req, res) => {
   try {
     const { prompt } = req.body;
-    const response = await axios.post(`${AI_SERVICE_URL}/script/get-suggestions`, { prompt });
+    const response = await axios.post(`${SCRIPT_AI_URL}/get-suggestions`, { prompt });
     res.json(response.data);
   } catch (error) {
     console.error("❌ Suggestions proxy failed:", error.message);
@@ -24,11 +25,11 @@ router.post("/enhance-script", async (req, res) => {
     console.log(`📜 enhance-script: "${prompt}"`);
 
     // Step 1: enhance the cinematic prompt
-    const enhanceRes = await axios.post(`${AI_SERVICE_URL}/script/enhance-prompt`, { prompt });
+    const enhanceRes = await axios.post(`${SCRIPT_AI_URL}/enhance-prompt`, { prompt });
     const enhancedPrompt = enhanceRes.data.enhanced_prompt || prompt;
 
     // Step 2: generate a full script from the enhanced prompt
-    const scriptRes = await axios.post(`${AI_SERVICE_URL}/script/generate-script`, {
+    const scriptRes = await axios.post(`${SCRIPT_AI_URL}/generate-script`, {
       topic: enhancedPrompt,
       category,
       duration,
@@ -60,7 +61,7 @@ router.post("/enhance-prompt", async (req, res) => {
     const { prompt } = req.body;
     console.log(`✨ Proxying enhance-prompt: "${prompt}"`);
     
-    const response = await axios.post(`${AI_SERVICE_URL}/script/enhance-prompt`, { prompt });
+    const response = await axios.post(`${SCRIPT_AI_URL}/enhance-prompt`, { prompt });
     res.json(response.data);
   } catch (error) {
     console.error("❌ Enhance prompt proxy failed:", error.message);
@@ -78,7 +79,7 @@ router.post("/generate-clip", async (req, res) => {
     const { prompt, duration } = req.body;
     console.log(`🎬 Proxying generate-clip: "${prompt}" (${duration}s)`);
     
-    const response = await axios.post(`${AI_SERVICE_URL}/video/generate-raw-clip`, { prompt, duration });
+    const response = await axios.post(`${VIDEO_AI_URL}/generate-raw-clip`, { prompt, duration });
     res.json(response.data);
   } catch (error) {
     console.error("❌ Generate clip proxy failed:", error.message);
@@ -94,7 +95,7 @@ router.post("/generate-clip", async (req, res) => {
 router.post("/trends", async (req, res) => {
   try {
     const { niche } = req.body;
-    const response = await axios.post(`${AI_SERVICE_URL}/script/get-trends`, { niche });
+    const response = await axios.post(`${SCRIPT_AI_URL}/get-trends`, { niche });
     res.json(response.data);
   } catch (error) {
     res.status(500).json({ success: false, trends: [] });
@@ -147,7 +148,7 @@ router.get("/health", async (req, res) => {
       timeout
     }),
     // 3. Script AI
-    axios.get(`${AI_SERVICE_URL}/script/health`, { timeout }),
+    axios.get(`${SCRIPT_AI_URL}/health`, { timeout }),
     // 4. Pexels
     axios.get("https://api.pexels.com/v1/collections/featured", {
       headers: { Authorization: process.env.PEXELS_API_KEY },

@@ -23,6 +23,18 @@ import { resumePendingJobs } from "./jobs/job.engine.js";
 import { initMusicLibrary } from "./services/music.service.js";
 import { setIO } from "./io-singleton.js";
 
+const defaultOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000"
+];
+const allowedOrigins = (process.env.CORS_ORIGINS || defaultOrigins.join(","))
+  .split(",")
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const isAllowedOrigin = (origin) => !origin || allowedOrigins.includes(origin);
+
 
 const app = express();
 const server = http.createServer(app);
@@ -30,8 +42,11 @@ const server = http.createServer(app);
 /* ---------- MIDDLEWARE ---------- */
 app.use(cors({
   origin: function(origin, callback) {
-    // Allow all requests and echo their exact origin back
-    callback(null, true);
+    if (isAllowedOrigin(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error("Not allowed by CORS"));
   },
   credentials: true
 }));
@@ -51,7 +66,13 @@ app.use(limiter);
 /* ---------- SOCKET ---------- */
 const io = new Server(server, {
   cors: {
-    origin: function(origin, callback) { callback(null, true); },
+    origin: function(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
     credentials: true
   }
 });

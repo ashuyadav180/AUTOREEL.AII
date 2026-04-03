@@ -12,6 +12,20 @@ import { useSocket } from "../hooks/useSocket";
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
 axios.defaults.withCredentials = true;
 
+const resolveMediaUrl = (pathValue) => {
+  if (!pathValue || typeof pathValue !== "string") return null;
+
+  const normalized = pathValue.replace(/\\/g, "/");
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+
+  const storageMatch = normalized.match(/(?:^|\/)(storage\/.+)$/i);
+  if (storageMatch) {
+    return `${API}/${storageMatch[1]}`;
+  }
+
+  return `${API}/storage/video/${normalized.replace(/^\/+/, "")}`;
+};
+
 const UsageProgressBar = ({ percent }) => {
   const color = percent > 50 ? "#22c55e" : percent > 20 ? "#f59e0b" : "#ef4444";
   return (
@@ -402,9 +416,9 @@ export default function Dashboard() {
                                                 opacity: 0.9
                                             }} />
 
-                                            {vid.videoPath && (
+                                            {resolveMediaUrl(vid.videoPath) && (
                                                 <video
-                                                    src={`${API}/storage/video/${vid.videoPath}`}
+                                                    src={resolveMediaUrl(vid.videoPath)}
                                                     style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0, opacity: 0.7, mixBlendMode: 'screen' }}
                                                     preload="metadata"
                                                     muted
@@ -434,7 +448,7 @@ export default function Dashboard() {
                                                     ▶ Preview
                                                 </button>
                                                 <a 
-                                                    href={`${API}/storage/video/${vid.videoPath}`} 
+                                                    href={resolveMediaUrl(vid.videoPath)} 
                                                     download 
                                                     onClick={(e) => e.stopPropagation()}
                                                     className="btn-dl" 
@@ -483,7 +497,7 @@ export default function Dashboard() {
                                   {previewVideo.videoPath ? (
                                     <video
                                       key={previewVideo.id}
-                                      src={`${API}/storage/video/${previewVideo.videoPath}`}
+                                      src={resolveMediaUrl(previewVideo.videoPath)}
                                       controls
                                       autoPlay
                                       style={{ width: '100%', maxHeight: '420px', objectFit: 'contain' }}
@@ -515,7 +529,7 @@ export default function Dashboard() {
                                   <div style={{ display: 'flex', gap: '12px' }}>
                                     {previewVideo.videoPath && (
                                       <a
-                                        href={`${API}/storage/video/${previewVideo.videoPath}`}
+                                        href={resolveMediaUrl(previewVideo.videoPath)}
                                         download
                                         style={{ flex: 1, textAlign: 'center', padding: '12px', background: '#6366f1', color: '#fff', textDecoration: 'none', borderRadius: '12px', fontSize: '13px', fontWeight: '700' }}
                                       >
@@ -579,7 +593,9 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
-              {jobs.map(j => (
+              {jobs.map(j => {
+                  const downloadUrl = resolveMediaUrl(j.output?.videoRel || j.output?.video || j.video_path || (j.steps && j.steps.video));
+                  return (
                   <div key={j.id} className={`job-item ${j.status === 'FAILED' || j.status === 'CANCELLED' ? 'failed' : j.status === 'COMPLETED' ? 'completed' : (j.status === 'PAUSED' || j.status === 'PENDING') ? 'paused' : 'processing'}`} style={{ padding: '16px', borderRadius: '16px', border: '1px solid #2A2A3A', background: '#16161E' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                           <div style={{ fontSize: '13px', fontWeight: '700', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.topic || j.prompt || "AI Generating..."}</div>
@@ -595,8 +611,8 @@ export default function Dashboard() {
                       )}
 
                       <div style={{ display: 'flex', gap: '8px' }}>
-                          {j.status === 'COMPLETED' && (
-                              <a href={`${API}/${j.video_path || (j.steps && j.steps.video)}`} download className="btn-dl" style={{ color: '#22c55e', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', padding: '6px 12px', fontSize: '11px', textDecoration: 'none', borderRadius: '8px' }}>⬇ Download</a>
+                          {j.status === 'COMPLETED' && downloadUrl && (
+                              <a href={downloadUrl} download className="btn-dl" style={{ color: '#22c55e', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', padding: '6px 12px', fontSize: '11px', textDecoration: 'none', borderRadius: '8px' }}>⬇ Download</a>
                           )}
                           {(j.status === 'FAILED' || j.status === 'PAUSED' || j.status === 'PENDING' || j.status === 'CANCELLED') && (
                               <>
@@ -610,7 +626,8 @@ export default function Dashboard() {
 
                       </div>
                   </div>
-              ))}
+                  );
+              })}
             </div>
           </aside>
         )}

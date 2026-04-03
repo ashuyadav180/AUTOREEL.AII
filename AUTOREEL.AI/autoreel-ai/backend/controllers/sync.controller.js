@@ -11,7 +11,8 @@ export const syncPendingUploads = async (req, res) => {
         const pendingJobs = jobs.filter(j =>
             j.status === "COMPLETED" &&
             j.output?.video &&
-            !j.output?.youtubeId
+            !j.output?.youtubeId &&
+            !j.youtubeId
         );
 
         if (pendingJobs.length === 0) {

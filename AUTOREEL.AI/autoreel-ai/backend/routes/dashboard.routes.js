@@ -3,6 +3,22 @@ import { getJobStats, getLibraryJobs, getAnalyticsSeries, getAnalyticsByCategory
 
 const router = express.Router();
 
+const getVideoPath = (output = {}) => {
+  const candidates = [output.videoRel, output.video];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "string") continue;
+
+    const normalized = candidate.replace(/\\/g, "/");
+    const storageMatch = normalized.match(/(?:^|\/)(storage\/.+)$/i);
+    if (storageMatch) {
+      return storageMatch[1];
+    }
+  }
+
+  return null;
+};
+
 /** GET /api/dashboard/stats */
 router.get("/stats", (req, res) => {
   try {
@@ -50,8 +66,9 @@ router.get("/library", (req, res) => {
       id: j.id,
       topic: j.topic || "Untitled AI Video",
       category: j.category || "motivation",
-      videoPath: j.output?.video || j.output?.videoRel,
-      createdAt: j.createdAt
+      videoPath: getVideoPath(j.output),
+      createdAt: j.createdAt,
+      language: j.output?.language || j.language || null
     }));
       
     res.json({ success: true, library });

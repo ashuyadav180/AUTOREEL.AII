@@ -10,6 +10,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("subtitle_ai")
 
 router = APIRouter()
+app = FastAPI(title="Subtitle AI", version="2.0")
+app.include_router(router)
 
 # ------------------ MODELS ------------------
 

@@ -183,9 +183,14 @@ export const uploadJobToYoutube = async (req, res) => {
       tags
     });
 
+    const updatedOutput = {
+      ...job.output,
+      youtubeId: uploadResult.id,
+      youtubeUrl: `https://youtu.be/${uploadResult.id}`
+    };
+
     updateJob(id, { 
-      youtubeId: uploadResult.id, 
-      youtubeUrl: `https://youtu.be/${uploadResult.id}`,
+      output: updatedOutput,
       percent: 100 
     });
 

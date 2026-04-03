@@ -37,6 +37,8 @@ else:
     logger.warning("âš ï¸ No STABILITY_API_KEY â€” image gen disabled")
 
 router = APIRouter(title="Image AI", version="1.0")
+app = FastAPI(title="Image AI", version="1.0")
+app.include_router(router)
 
 # â”€â”€ Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class Scene(BaseModel):

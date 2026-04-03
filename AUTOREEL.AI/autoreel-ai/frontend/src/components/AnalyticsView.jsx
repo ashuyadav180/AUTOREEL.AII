@@ -382,13 +382,7 @@ export default function AnalyticsView() {
 
             </div>
 
-            {/* SECTION 4: ENGAGEMENT BREAKDOWN */}
-            <div style={{ background: 'var(--card-analytics)', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.05)', padding: '32px' }}>
-                <SectionHeader title="Category Engagement" sub="Visualizing views based on content niche" />
-                <div style={{ height: '300px' }}>
-                    <Bar data={engagementData} options={engagementOptions} />
-                </div>
-            </div>
+           
 
             {/* SECTION 6: CONNECT BANNER */}
             {!hasData && (

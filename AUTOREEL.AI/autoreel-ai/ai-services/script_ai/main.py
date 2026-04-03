@@ -10,8 +10,12 @@ from fastapi import FastAPI, APIRouter
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import google.generativeai as genai
-import anthropic
 import httpx
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 load_dotenv()
 
@@ -31,17 +35,21 @@ else:
 
 # â”€â”€ Claude â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-if ANTHROPIC_API_KEY:
+if ANTHROPIC_API_KEY and anthropic:
     claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     CLAUDE_ENABLED = True
     logger.info("âœ… Claude Sonnet enabled")
 else:
     claude_client = None
     CLAUDE_ENABLED = False
-    logger.warning("âš ï¸ No ANTHROPIC_API_KEY â€” scene planner will use fallback")
+    if ANTHROPIC_API_KEY and not anthropic:
+        logger.warning("âš ï¸ anthropic package missing â€” scene planner will use fallback")
+    else:
+        logger.warning("âš ï¸ No ANTHROPIC_API_KEY â€” scene planner will use fallback")
 
 router = APIRouter()
-# app = FastAPI(title="Script AI", version="2.0")
+app = FastAPI(title="Script AI", version="2.0")
+app.include_router(router)
 
 # â”€â”€ Models â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class EnhanceRequest(BaseModel):

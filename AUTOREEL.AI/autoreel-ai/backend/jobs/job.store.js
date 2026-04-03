@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { randomUUID } from "crypto";
 import db from "./db.js";
 
 /**
@@ -124,7 +125,7 @@ export const initJobStore = () => {
  */
 export const createNewJob = (topic, type = "REEL", category = "motivation") => {
   const job = {
-    id: `job_${Date.now()}`,
+    id: `job_${Date.now()}_${randomUUID().slice(0, 8)}`,
     topic,
     type,
     category,

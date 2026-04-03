@@ -31,6 +31,8 @@ import json
 from dotenv import load_dotenv
 
 router = APIRouter()
+app = FastAPI(title="Video AI", version="2.0")
+app.include_router(router)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("video_ai")
 
@@ -61,7 +63,7 @@ if RUNWAYML_API_SECRET:
         from runwayml import RunwayML
         RUNWAY_CLIENT = RunwayML(api_key=RUNWAYML_API_SECRET)
     except ImportError:
-        print("âš ï¸ runwayml package not found. Run 'pip install runwayml'")
+        logger.warning("runwayml package not found. Run 'pip install runwayml' to enable Runway generation.")
 
 VIDEO_DIR  = os.path.join(PROJECT_ROOT, "backend", "storage", "video")
 TMP_DIR    = os.path.join(PROJECT_ROOT, "backend", "storage", "tmp")
