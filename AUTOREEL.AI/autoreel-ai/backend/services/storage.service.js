@@ -13,8 +13,24 @@ import mime from "mime-types";
  * Supports Local FS and S3-compatible (R2/AWS/DigitalOcean).
  */
 
-const STORAGE_TYPE = process.env.STORAGE_TYPE || "local"; // local | s3
+const configuredStorageType = process.env.STORAGE_TYPE || "local"; // local | s3
 const STORAGE_ROOT = path.resolve(process.cwd(), "storage");
+const hasPlaceholder = (value = "") => value.includes("<") || value.includes("your-") || value.includes("example");
+const hasUsableS3Config = Boolean(
+    process.env.S3_ENDPOINT &&
+    process.env.S3_ACCESS_KEY_ID &&
+    process.env.S3_SECRET_ACCESS_KEY &&
+    process.env.S3_BUCKET_NAME &&
+    !hasPlaceholder(process.env.S3_ENDPOINT) &&
+    !hasPlaceholder(process.env.S3_ACCESS_KEY_ID) &&
+    !hasPlaceholder(process.env.S3_SECRET_ACCESS_KEY) &&
+    !hasPlaceholder(process.env.S3_BUCKET_NAME)
+);
+const STORAGE_TYPE = configuredStorageType === "s3" && hasUsableS3Config ? "s3" : "local";
+
+if (configuredStorageType === "s3" && STORAGE_TYPE === "local") {
+    console.warn("Storage fallback: S3 is configured but missing usable credentials/endpoints. Using local storage.");
+}
 
 // S3 Configuration
 const s3Client = STORAGE_TYPE === "s3" ? new S3Client({

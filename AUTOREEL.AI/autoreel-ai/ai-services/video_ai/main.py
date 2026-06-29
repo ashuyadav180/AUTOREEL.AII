@@ -1,8 +1,34 @@
-﻿"""
+"""
 video_ai/main.py â€” AutoReel.ai (Vid.AI-Style Upgrade)
 Professional video assembly pipeline with:
   - AI Scene Plans: uses script_ai scene JSON with per-scene visual directions
   - Fallback Scene Segmentation: script â†’ sentences â†’ keyword extraction
+  - Per-scene Pexels keyword search (AI-directed, not stopword-extracted)
+  - 10-20 micro-clips (2-4s each) for a 60s video
+  - Zoom-punch pattern interrupts every 3rd clip
+  - Per-clip mood-based color grading (intense/calm/shocking/inspiring)
+  - FFmpeg color grade per category
+  - Animated intro slate + 'FOLLOW FOR MORE' outro
+  - MrBeast-style karaoke captions (ass_utils)
+  - Category-specific background music
+  - Auto-thumbnail generation
+  - @AutoReelAI watermark
+"""
+
+from fastapi import FastAPI, APIRouter
+from pydantic import BaseModel, Field
+import subprocess
+import time
+import os
+import logging
+import requests
+import random
+import glob
+"""
+video_ai/main.py — AutoReel.ai (Vid.AI-Style Upgrade)
+Professional video assembly pipeline with:
+  - AI Scene Plans: uses script_ai scene JSON with per-scene visual directions
+  - Fallback Scene Segmentation: script → sentences → keyword extraction
   - Per-scene Pexels keyword search (AI-directed, not stopword-extracted)
   - 10-20 micro-clips (2-4s each) for a 60s video
   - Zoom-punch pattern interrupts every 3rd clip
@@ -32,30 +58,35 @@ from dotenv import load_dotenv
 
 router = APIRouter()
 app = FastAPI(title="Video AI", version="2.0")
-app.include_router(router)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("video_ai")
 
-# â”€â”€â”€ ENVIRONMENT LOADING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 # Prioritize backend/.env, then root .env
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 backend_env = os.path.join(PROJECT_ROOT, "backend", ".env")
 root_env = os.path.join(PROJECT_ROOT, ".env")
 
-logger.info(f"ðŸ“ PROJECT_ROOT: {PROJECT_ROOT}")
-logger.info(f"ðŸ“‚ Loading backend env: {backend_env} (exists: {os.path.exists(backend_env)})")
-logger.info(f"ðŸ“‚ Loading root env: {root_env} (exists: {os.path.exists(root_env)})")
+logger.info(f"📍 PROJECT_ROOT: {PROJECT_ROOT}")
+logger.info(f"📂 Loading backend env: {backend_env} (exists: {os.path.exists(backend_env)})")
+logger.info(f"📂 Loading root env: {root_env} (exists: {os.path.exists(root_env)})")
 
 load_dotenv(backend_env)
 load_dotenv(root_env)
 
-# â”€â”€â”€ CONFIG & CLIENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 PEXELS_API_KEY      = os.getenv("PEXELS_API_KEY")
 RUNWAYML_API_SECRET = os.getenv("RUNWAYML_API_SECRET")
+KLING_ACCESS_KEY    = os.getenv("KLING_ACCESS_KEY")
+KLING_SECRET_KEY    = os.getenv("KLING_SECRET_KEY")
+FAL_API_KEY         = os.getenv("FAL_API_KEY")
 WATERMARK_TEXT      = os.getenv("WATERMARK_TEXT", "@AutoReelAI")
 
-logger.info(f"ðŸ”‘ PEXELS_KEY found: {bool(PEXELS_API_KEY)}")
-logger.info(f"ðŸ”‘ RUNWAY_KEY found: {bool(RUNWAYML_API_SECRET)}")
+logger.info(f"🔑 PEXELS_KEY found: {bool(PEXELS_API_KEY)}")
+logger.info(f"🔑 RUNWAY_KEY found: {bool(RUNWAYML_API_SECRET)}")
+logger.info(f"🔑 KLING_ACCESS_KEY found: {bool(KLING_ACCESS_KEY)}")
+logger.info(f"🔑 KLING_SECRET_KEY found: {bool(KLING_SECRET_KEY)}")
+logger.info(f"🔑 FAL_API_KEY found: {bool(FAL_API_KEY)}")
 
 RUNWAY_CLIENT = None
 if RUNWAYML_API_SECRET:
@@ -72,7 +103,7 @@ MUSIC_ROOT = os.path.join(PROJECT_ROOT, "backend", "storage", "music")
 os.makedirs(VIDEO_DIR, exist_ok=True)
 os.makedirs(TMP_DIR, exist_ok=True)
 
-# â”€â”€â”€ MODELS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 class VideoRequest(BaseModel):
     topic: str = Field(..., min_length=2)
@@ -92,7 +123,7 @@ class RawVideoRequest(BaseModel):
     duration: float = Field(default=5.0)
 
 
-# â”€â”€â”€ CATEGORY DATA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 CATEGORY_KEYWORDS = {
     "motivation":      ["athlete training", "city sunrise", "running marathon", "gym workout", "mountain summit",
@@ -123,20 +154,70 @@ STOPWORDS = {
 
 # FFmpeg color grade filter per category (base grades)
 COLOR_GRADES = {
-    "motivation":      "eq=contrast=1.12:saturation=1.35:brightness=0.02,colorbalance=rs=0.08:gs=-0.04:bs=-0.08",
-    "storytelling":    "eq=contrast=1.06:saturation=0.88:brightness=-0.01,colorbalance=rs=-0.04:bs=0.08",
-    "finance":         "eq=contrast=1.10:saturation=1.10:brightness=0.04,colorbalance=rs=0.04:gs=0.02:bs=-0.04",
-    "dark_psychology": "eq=contrast=1.18:saturation=0.55:brightness=-0.06",
-    "ai_news":         "eq=contrast=1.08:saturation=1.22,colorbalance=rs=-0.08:bs=0.14",
-    "halku":           "eq=contrast=1.15:saturation=1.20:brightness=0.03,colorbalance=rs=0.05:bs=-0.05",
+    "motivation": (
+        # Orange & Teal — Hollywood action style
+        "curves=r='0/0 0.5/0.55 1/1':g='0/0 0.5/0.5 1/0.95':b='0/0.05 0.5/0.42 1/0.78',"
+        "eq=contrast=1.08:saturation=1.20:brightness=0.01,"
+        "vignette=angle=PI/5"
+    ),
+    "storytelling": (
+        # Desaturated blue shadows + warm highlights — cinematic noir
+        "curves=r='0/0.02 0.5/0.52 1/0.92':g='0/0 0.5/0.48 1/0.88':b='0/0.08 0.5/0.50 1/0.80',"
+        "eq=contrast=1.12:saturation=0.78:brightness=-0.02,"
+        "vignette=angle=PI/4"
+    ),
+    "finance": (
+        # Cool blue-green — corporate prestige
+        "curves=r='0/0 0.5/0.48 1/0.90':g='0/0.02 0.5/0.52 1/0.95':b='0/0.05 0.5/0.55 1/1',"
+        "eq=contrast=1.10:saturation=1.05:brightness=0.02,"
+        "vignette=angle=PI/5"
+    ),
+    "dark_psychology": (
+        # Heavy desaturation + crushed blacks — thriller style
+        "curves=r='0/0 0.5/0.40 1/0.85':g='0/0 0.5/0.40 1/0.82':b='0/0.05 0.5/0.45 1/0.80',"
+        "eq=contrast=1.22:saturation=0.45:brightness=-0.05,"
+        "vignette=angle=PI/3"
+    ),
+    "ai_news": (
+        # Cyan & cool — sci-fi tech style
+        "curves=r='0/0 0.5/0.44 1/0.88':g='0/0.02 0.5/0.50 1/0.92':b='0/0.08 0.5/0.58 1/1',"
+        "eq=contrast=1.10:saturation=1.18:brightness=0.01,"
+        "vignette=angle=PI/5"
+    ),
+    "halku": (
+        # Warm vintage film — golden memory style
+        "curves=r='0/0.04 0.5/0.58 1/0.96':g='0/0.02 0.5/0.50 1/0.90':b='0/0 0.5/0.42 1/0.78',"
+        "eq=contrast=1.06:saturation=1.10:brightness=0.03,"
+        "vignette=angle=PI/4"
+    ),
 }
 
-# Per-mood color grade overrides â€” applied per-clip when mood is available
+# Per-mood color grade overrides — applied per-clip when mood is available
 MOOD_GRADES = {
-    "intense":   "eq=contrast=1.20:saturation=1.40:brightness=0.01,colorbalance=rs=0.10:gs=-0.05:bs=-0.10",
-    "shocking":  "eq=contrast=1.22:saturation=0.65:brightness=-0.04",
-    "inspiring": "eq=contrast=1.08:saturation=1.25:brightness=0.04,colorbalance=rs=0.06:gs=0.02:bs=-0.04",
-    "calm":      "eq=contrast=1.04:saturation=0.90:brightness=-0.01,colorbalance=rs=-0.03:bs=0.06",
+    "intense": (
+        # Punchy high contrast — action
+        "curves=r='0/0 0.5/0.58 1/1':g='0/0 0.5/0.48 1/0.90':b='0/0.05 0.5/0.40 1/0.75',"
+        "eq=contrast=1.25:saturation=1.35:brightness=0.02,"
+        "vignette=angle=PI/4"
+    ),
+    "shocking": (
+        # Bleach bypass — gritty desaturated
+        "curves=r='0/0 0.5/0.45 1/0.90':g='0/0 0.5/0.45 1/0.88':b='0/0.05 0.5/0.48 1/0.85',"
+        "eq=contrast=1.28:saturation=0.40:brightness=-0.03,"
+        "vignette=angle=PI/3"
+    ),
+    "inspiring": (
+        # Golden hour warm lift
+        "curves=r='0/0.02 0.5/0.58 1/0.98':g='0/0.01 0.5/0.50 1/0.92':b='0/0 0.5/0.40 1/0.75',"
+        "eq=contrast=1.08:saturation=1.22:brightness=0.03,"
+        "vignette=angle=PI/5"
+    ),
+    "calm": (
+        # Soft muted cool — peaceful
+        "curves=r='0/0.02 0.5/0.48 1/0.88':g='0/0.02 0.5/0.50 1/0.90':b='0/0.06 0.5/0.52 1/0.92',"
+        "eq=contrast=1.04:saturation=0.82:brightness=0.01,"
+        "vignette=angle=PI/6"
+    ),
 }
 
 # Intro/Outro accent colors per category
@@ -149,7 +230,7 @@ CATEGORY_COLORS = {
     "halku":           ("0x00CC00", "00CC00"),
 }
 
-# â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 def to_posix(path: str) -> str:
     return path.replace("\\", "/")
@@ -172,13 +253,13 @@ def get_audio_duration(audio_abs: str) -> float:
 def get_music_path(category: str) -> str | None:
     cat_track = os.path.join(MUSIC_ROOT, category, "track.mp3")
     if os.path.exists(cat_track):
-        logger.info(f"ðŸŽµ Category music: {category}/track.mp3")
+        logger.info(f"🎵 Category music: {category}/track.mp3")
         return cat_track
     for folder in [os.path.join(MUSIC_ROOT, category), MUSIC_ROOT]:
         files = glob.glob(os.path.join(folder, "*.mp3")) + glob.glob(os.path.join(folder, "*.wav"))
         if files:
             chosen = random.choice(files)
-            logger.info(f"ðŸŽµ Fallback music: {os.path.basename(chosen)}")
+            logger.info(f"🎵 Fallback music: {os.path.basename(chosen)}")
             return chosen
     return None
 
@@ -209,19 +290,19 @@ def get_satisfying_clip(duration: float) -> str | None:
                 with open(vid_path, "wb") as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
-                logger.info(f"âœ… Bottom clip fetched: {kw}")
+                logger.info(f"✅ Bottom clip fetched: {kw}")
                 return vid_path
     except Exception as e:
-        logger.error(f"âŒ Bottom clip failed: {e}")
+        logger.error(f"❌ Bottom clip failed: {e}")
     return None
 
-# â”€â”€â”€ SCENE PLANNING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 
 def parse_ai_scene_plan(scenes_json: str, target_clip_count: int = 15) -> list:
     """
     Parse AI scene plan from script_ai. Each scene has:
-      { text, visual, mood } â€” 'visual' is the Pexels search query.
+      { text, visual, mood } — 'visual' is the Pexels search query.
     Returns list of { text, keywords, mood, index } for downstream processing.
     """
     import json as _json
@@ -244,9 +325,9 @@ def parse_ai_scene_plan(scenes_json: str, target_clip_count: int = 15) -> list:
     while len(scenes) < min(target_clip_count, 8) and len(scenes) > 0:
         scenes = scenes + [{**s, "index": len(scenes) + j} for j, s in enumerate(scenes[:max(1, target_clip_count - len(scenes))])]
 
-    logger.info(f"ðŸŽ¯ AI Scene Plan: {len(scenes)} scenes parsed")
+    logger.info(f"🎯 AI Scene Plan: {len(scenes)} scenes parsed")
     for s in scenes:
-        logger.info(f"   [{s['mood'].upper()}] Scene {s['index']}: '{s['keywords']}' â† \"{s['text'][:45]}\"")
+        logger.info(f"   [{s['mood'].upper()}] Scene {s['index']}: '{s['keywords']}' ← \"{s['text'][:45]}\"")
 
     return scenes
 
@@ -283,10 +364,10 @@ def segment_script_to_scenes(script: str, category: str, target_clip_count: int 
 
         scenes.append({"text": sentence, "keywords": query, "mood": "inspiring", "index": i})
 
-    logger.info(f"ðŸ“‹ Fallback segmentation: {len(scenes)} scenes")
+    logger.info(f"📋 Fallback segmentation: {len(scenes)} scenes")
     return scenes
 
-# â”€â”€â”€ PER-SCENE PEXELS CLIP SEARCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 def fetch_single_clip(scene: dict, clip_dur: float, used_ids: set) -> str | None:
     """
@@ -332,12 +413,259 @@ def fetch_single_clip(scene: dict, clip_dur: float, used_ids: set) -> str | None
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            logger.info(f"   âœ… Scene {scene_idx}: '{attempt_query}' â†’ {os.path.basename(vid_path)}")
+            logger.info(f"   ✅ Scene {scene_idx}: '{attempt_query}' → {os.path.basename(vid_path)}")
             return vid_path
 
         except Exception as e:
-            logger.warning(f"   âš ï¸ Scene {scene_idx} fetch failed ({attempt_query}): {e}")
+            logger.warning(f"   ⚠️ Scene {scene_idx} fetch failed ({attempt_query}): {e}")
             continue
+
+    return None
+
+
+import base64
+import hmac
+import hashlib
+import json
+
+def generate_kling_token(ak: str, sk: str) -> str:
+    """Generates a JWT token for Kling AI API authentication in pure Python."""
+    def base64url_encode(payload: bytes) -> str:
+        return base64.urlsafe_b64encode(payload).decode('utf-8').replace('=', '')
+
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "iss": ak,
+        "exp": int(time.time()) + 1800,  # 30 minutes expiration
+        "nbf": int(time.time()) - 5      # Valid 5 seconds ago
+    }
+
+    header_json = json.dumps(header, separators=(',', ':')).encode('utf-8')
+    payload_json = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+
+    header_b64 = base64url_encode(header_json)
+    payload_b64 = base64url_encode(payload_json)
+
+    message = f"{header_b64}.{payload_b64}".encode('utf-8')
+    signature = hmac.new(sk.encode('utf-8'), message, hashlib.sha256).digest()
+    signature_b64 = base64url_encode(signature)
+
+    return f"{header_b64}.{payload_b64}.{signature_b64}"
+
+_kling_credits_exhausted = False
+_fal_credits_exhausted = False
+
+def generate_kling_clip(scene: dict, clip_dur: float, used_ids: set) -> str | None:
+    """Fetch video from Kling AI v3.0 API (kling-v3) using Fal.ai or direct API."""
+    global _kling_credits_exhausted, _fal_credits_exhausted
+    
+    # Try Fal.ai first if key is available
+    if FAL_API_KEY and not _fal_credits_exhausted:
+        try:
+            base_prompt = scene["keywords"]
+            prompt = f"{base_prompt}, cinematic, stunning composition, gorgeous lighting, masterpiece, 4k"
+            scene_idx = scene["index"]
+            logger.info(f"   🚀 [Fal.ai] Kling Scene {scene_idx} queuing: '{base_prompt}'")
+
+            aspect_ratio = "9:16"
+            duration = 5
+            if clip_dur > 5.0:
+                duration = 10
+
+            url = "https://queue.fal.run/fal-ai/kling-video/v3/standard/text-to-video"
+            headers = {
+                "Authorization": f"Key {FAL_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "prompt": prompt,
+                "duration": duration,
+                "aspect_ratio": aspect_ratio
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            res_data = response.json()
+
+            if response.status_code != 200 or "request_id" not in res_data:
+                msg = res_data.get("detail") or res_data.get("message") or f"HTTP {response.status_code}"
+                if any(k in msg.lower() for k in ["balance", "credit", "quota", "limit", "insufficient"]):
+                    _fal_credits_exhausted = True
+                    logger.warning("   ⚠️ Fal.ai credits exhausted — switching to direct Kling/Runway")
+                raise Exception(f"Fal.ai task creation failed: {msg}")
+
+            request_id = res_data["request_id"]
+            status_url = res_data["status_url"]
+            response_url = res_data["response_url"]
+            logger.info(f"   🎥 [Fal.ai] Kling task created: {request_id}")
+
+            start_time = time.time()
+            timeout = 900
+            video_url = None
+
+            while True:
+                if time.time() - start_time > timeout:
+                    raise Exception("Fal.ai generation timed out after 15 minutes")
+
+                status_res = requests.get(status_url, headers=headers, timeout=60)
+                status_data = status_res.json()
+
+                if status_res.status_code != 200:
+                    raise Exception(f"Fal.ai status check failed: HTTP {status_res.status_code}")
+
+                task_status = status_data.get("status")
+                logger.info(f"   [DEBUG] Fal.ai status: {task_status}")
+
+                if task_status == "COMPLETED":
+                    res_get = requests.get(response_url, headers=headers, timeout=60)
+                    if res_get.status_code == 200:
+                        res_get_data = res_get.json()
+                        if "video" in res_get_data and "url" in res_get_data["video"]:
+                            video_url = res_get_data["video"]["url"]
+                            break
+                        else:
+                            raise Exception(f"Fal.ai response schema unexpected: {res_get_data}")
+                    else:
+                        raise Exception(f"Fal.ai failed to retrieve response: HTTP {res_get.status_code}")
+                elif task_status == "FAILED":
+                    raise Exception(f"Fal.ai generation failed: {status_data.get('logs') or 'unknown reason'}")
+                
+                time.sleep(10)
+
+            if not video_url:
+                raise Exception("Fal.ai succeeded but no video URL was returned.")
+
+            # Deduct internal credits
+            try:
+                credits_path = os.path.join(PROJECT_ROOT, "backend", "storage", "credits.json")
+                if os.path.exists(credits_path):
+                    with open(credits_path, "r", encoding="utf-8") as f:
+                        cdata = json.load(f)
+                    if "kling" not in cdata:
+                        cdata["kling"] = {"used": 0, "total": 100, "lastUpdated": ""}
+                    cdata["kling"]["used"] += 1
+                    cdata["kling"]["lastUpdated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    with open(credits_path, "w", encoding="utf-8") as f:
+                        json.dump(cdata, f, indent=2)
+                    logger.info(f"   📉 Internal Credits: Kling (via Fal.ai) used incremented to {cdata['kling']['used']}")
+            except Exception as e:
+                logger.error(f"   ⚠️ Failed to update internal credits: {e}")
+
+            # Download video
+            vid_path = os.path.join(TMP_DIR, f"kling_fal_{scene_idx}_{int(time.time())}.mp4")
+            r = requests.get(video_url, stream=True, timeout=60)
+            with open(vid_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            logger.info(f"   ✅ [Fal.ai] Kling Scene {scene_idx} completed & downloaded safely")
+            return vid_path
+
+        except Exception as e:
+            logger.error(f"❌ [Fal.ai] Kling Generation FAILED for Scene {scene['index']}: {e}")
+            # fall through to try direct Kling API if possible
+
+    # Direct Kling API fallback
+    if KLING_ACCESS_KEY and KLING_SECRET_KEY and not _kling_credits_exhausted:
+        try:
+            token = generate_kling_token(KLING_ACCESS_KEY, KLING_SECRET_KEY)
+            base_prompt = scene["keywords"]
+            prompt = f"{base_prompt}, cinematic, stunning composition, gorgeous lighting, masterpiece, 4k"
+            scene_idx = scene["index"]
+            logger.info(f"   🚀 [Direct] Kling Scene {scene_idx} queuing: '{base_prompt}'")
+
+            aspect_ratio = "9:16"
+            dur_str = "5"
+            if clip_dur > 5.0:
+                dur_str = "10"
+
+            url = "https://api-singapore.klingai.com/v1/videos/text2video"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model_name": "kling-v3",
+                "prompt": prompt,
+                "duration": dur_str,
+                "aspect_ratio": aspect_ratio
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            res_data = response.json()
+
+            if response.status_code != 200 or res_data.get("code") != 0:
+                msg = res_data.get("message") or f"HTTP {response.status_code}"
+                if any(k in msg.lower() for k in ["balance", "credit", "quota", "limit", "insufficient"]):
+                    _kling_credits_exhausted = True
+                    logger.warning("   ⚠️ Direct Kling credits or quota exhausted")
+                raise Exception(f"Kling API task creation failed: {msg}")
+
+            task_id = res_data["data"]["task_id"]
+            logger.info(f"   🎥 [Direct] Kling task created: {task_id}")
+
+            start_time = time.time()
+            timeout = 900
+            video_url = None
+
+            while True:
+                if time.time() - start_time > timeout:
+                    raise Exception("Kling generation timed out after 15 minutes")
+
+                current_token = generate_kling_token(KLING_ACCESS_KEY, KLING_SECRET_KEY)
+                status_url = f"https://api-singapore.klingai.com/v1/videos/text2video/{task_id}"
+                status_headers = {
+                    "Authorization": f"Bearer {current_token}",
+                    "Content-Type": "application/json"
+                }
+
+                status_res = requests.get(status_url, headers=status_headers, timeout=60)
+                status_data = status_res.json()
+
+                if status_res.status_code != 200 or status_data.get("code") != 0:
+                    raise Exception(f"Kling status check failed: {status_data.get('message')}")
+
+                task_status = status_data["data"]["task_status"]
+                logger.info(f"   [DEBUG] Kling status: {task_status}")
+
+                if task_status == "succeed":
+                    video_url = status_data["data"]["result"]["video_url"]
+                    break
+                elif task_status == "failed":
+                    fail_reason = status_data["data"].get("task_status_msg") or "unknown reason"
+                    raise Exception(f"Kling generation failed: {fail_reason}")
+
+                time.sleep(10)
+
+            if not video_url:
+                raise Exception("Kling succeeded but no video URL was returned.")
+
+            # Deduct internal credits
+            try:
+                credits_path = os.path.join(PROJECT_ROOT, "backend", "storage", "credits.json")
+                if os.path.exists(credits_path):
+                    with open(credits_path, "r", encoding="utf-8") as f:
+                        cdata = json.load(f)
+                    if "kling" not in cdata:
+                        cdata["kling"] = {"used": 0, "total": 100, "lastUpdated": ""}
+                    cdata["kling"]["used"] += 1
+                    cdata["kling"]["lastUpdated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    with open(credits_path, "w", encoding="utf-8") as f:
+                        json.dump(cdata, f, indent=2)
+                    logger.info(f"   📉 Internal Credits: Kling used incremented to {cdata['kling']['used']}")
+            except Exception as e:
+                logger.error(f"   ⚠️ Failed to update internal credits: {e}")
+
+            # Download video
+            vid_path = os.path.join(TMP_DIR, f"kling_direct_{scene_idx}_{int(time.time())}.mp4")
+            r = requests.get(video_url, stream=True, timeout=60)
+            with open(vid_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            logger.info(f"   ✅ [Direct] Kling Scene {scene_idx} completed & downloaded safely")
+            return vid_path
+
+        except Exception as e:
+            logger.error(f"❌ [Direct] Kling Generation FAILED for Scene {scene['index']}: {e}")
+            return None
 
     return None
 
@@ -359,17 +687,17 @@ def generate_runway_clip(scene: dict, clip_dur: float, used_ids: set) -> str | N
         base_prompt = scene["keywords"]
         prompt = f"{base_prompt}, cinematic, stunning composition, gorgeous lighting, masterpiece, 4k"
         scene_idx = scene["index"]
-        logger.info(f"   ðŸš€ Runway Scene {scene_idx} queuing: '{base_prompt}'")
-        logger.info(f"   [DEBUG] Sending to Runway model: veo3.1")
+        logger.info(f"   🚀 Runway Scene {scene_idx} queuing: '{base_prompt}'")
+        logger.info("   🎬 Provider order: Kling V3 (fal.ai) → Kling Direct → Runway fallback")
 
         # 2. Generate Video
         task = client.text_to_video.create(
             model="veo3.1",
             prompt_text=prompt,
-            ratio="720:1280"
+            ratio="768:1280"
         )
         task_id = task.id
-        logger.info(f"   ðŸŽ¬ Runway task created: {task_id}")
+        logger.info(f"   🎥 Runway task created: {task_id}")
 
         # 3. Robust Polling Loop
         start_time = time.time()
@@ -405,9 +733,9 @@ def generate_runway_clip(scene: dict, clip_dur: float, used_ids: set) -> str | N
                 cdata["runway"]["lastUpdated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 with open(credits_path, "w", encoding="utf-8") as f:
                     json.dump(cdata, f, indent=2)
-                logger.info(f"   ðŸ“‰ Internal Credits: Runway used incremented to {cdata['runway']['used']}")
+                logger.info(f"   📉 Internal Credits: Runway used incremented to {cdata['runway']['used']}")
         except Exception as e:
-            logger.error(f"   âš ï¸ Failed to update internal credits: {e}")
+            logger.error(f"   ⚠️ Failed to update internal credits: {e}")
 
         # 5. Download output video
         vid_path = os.path.join(TMP_DIR, f"runway_{scene_idx}_{int(time.time())}.mp4")
@@ -415,48 +743,65 @@ def generate_runway_clip(scene: dict, clip_dur: float, used_ids: set) -> str | N
         with open(vid_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-        logger.info(f"   âœ… Runway Scene {scene_idx} completed & downloaded safely")
+        logger.info(f"   ✅ Runway Scene {scene_idx} completed & downloaded safely")
         return vid_path
 
     except Exception as e:
-        logger.error(f"âŒ Runway Generation FAILED for Scene {scene['index']}: {e}")
+        logger.error(f"❌ Runway Generation FAILED for Scene {scene['index']}: {e}")
         # We allow fallback now
         return None
 
 
 
-def get_scene_clips(scenes: list, category: str, clip_dur: float) -> list:
+def get_scene_clips(scenes: list, category: str, clip_dur: float, force_ai: bool = False) -> list:
+    """
+    force_ai=True: ALL scenes go to AI Video Generator (cinematic mode)
+    force_ai=False: tiered (AI Video Generator for hero, Pexels for rest)
+    """
+    if force_ai:
+        logger.info(f"🎬 FULL CINEMATIC MODE: All {len(scenes)} scenes → Kling V3 (fal.ai)")
+        used_ids = set()
+        results = [None] * len(scenes)
+        for scene in scenes:
+            # 1. Try Kling first
+            path = generate_kling_clip(scene, clip_dur, used_ids)
+            # 2. Fallback to Runway
+            if not path:
+                logger.info(f"   🔄 Falling back to Runway for Scene {scene['index']}...")
+                path = generate_runway_clip(scene, clip_dur, used_ids)
+            results[scene["index"]] = path
+        return results
+
     """
     Tiered clip fetching:
-    - First RUNWAY_SCENE_CAP scenes â†’ RunwayML (sequential, respects credit budget)
-    - Remaining scenes â†’ Pexels in parallel (fast)
+    - First AI generator for hero scenes (sequential, respects credit budget)
+    - Remaining scenes → Pexels in parallel (fast)
     - Falls back to category keywords if any source fails
     """
-    RUNWAY_SCENE_CAP = 3  # max RunwayML scenes per video (cost control)
-
-    logger.info(f"ðŸŽžï¸ Fetching {len(scenes)} scene clips (target {clip_dur:.1f}s each)...")
+    logger.info(f"🎞️ Fetching {len(scenes)} scene clips (target {clip_dur:.1f}s each)...")
     used_ids = set()
     results = [None] * len(scenes)
     cat_fallbacks = CATEGORY_KEYWORDS.get(category, CATEGORY_KEYWORDS["motivation"])
 
-    # â”€â”€ TIER 1: RunwayML for "Hero" scenes (Sequential) â”€â”€
-    if RUNWAYML_API_SECRET and not _runway_credits_exhausted:
-        hero_scenes = [s for s in scenes if s.get("hero") is True]
-        if not hero_scenes:
-            hero_scenes = scenes[:1] # Always a hero shot at intro
-            
-        logger.info(f"   ðŸŽ¬ RunwayML Hero Mode: generating {len(hero_scenes)} high-impact scenes sequentially")
-        for scene in hero_scenes:
-            if _runway_credits_exhausted:
-                logger.info("   âš¡ Runway credits exhausted mid-batch â€” switching to Pexels for remainder")
-                break
+    # ——— TIER 1: AI Video Generator for "Hero" scenes (Sequential) ———
+    hero_scenes = [s for s in scenes if s.get("hero") is True]
+    if not hero_scenes:
+        hero_scenes = scenes[:1] # Always a hero shot at intro
+        
+    logger.info(f"   🎥 AI Hero Mode: generating {len(hero_scenes)} high-impact scenes sequentially")
+    for scene in hero_scenes:
+        # 1. Try Kling first
+        path = generate_kling_clip(scene, clip_dur, used_ids)
+        # 2. Fallback to Runway
+        if not path:
+            logger.info(f"   🔄 Falling back to Runway for Hero Scene {scene['index']}...")
             path = generate_runway_clip(scene, clip_dur, used_ids)
-            results[scene["index"]] = path
+        results[scene["index"]] = path
 
-    # â”€â”€ TIER 2: Pexels in parallel for all remaining scenes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ——— TIER 2: Pexels in parallel for all remaining scenes ————————————————————————
     pexels_scenes = [s for s in scenes if results[s["index"]] is None]
     if pexels_scenes:
-        logger.info(f"   ðŸ–¼ï¸ Pexels: fetching {len(pexels_scenes)} scenes in parallel...")
+        logger.info(f"   🖼️ Pexels: fetching {len(pexels_scenes)} scenes in parallel...")
         with ThreadPoolExecutor(max_workers=4) as executor:
             future_to_idx = {
                 executor.submit(fetch_single_clip, scene, clip_dur, used_ids): scene["index"]
@@ -468,12 +813,12 @@ def get_scene_clips(scenes: list, category: str, clip_dur: float) -> list:
                     path = future.result()
                     results[idx] = path
                 except Exception as e:
-                    logger.warning(f"   âš ï¸ Scene {idx} future failed: {e}")
+                    logger.warning(f"   ⚠️ Scene {idx} future failed: {e}")
 
-    # â”€â”€ TIER 3: Category keyword fallback for any still-failed scenes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ——— TIER 3: Category keyword fallback for any still-failed scenes ————————————————————
     failed_indices = [i for i, r in enumerate(results) if r is None]
     if failed_indices:
-        logger.info(f"   ðŸ”„ Retrying {len(failed_indices)} failed scenes with category fallback...")
+        logger.info(f"   🔄 Retrying {len(failed_indices)} failed scenes with category fallback...")
         for idx in failed_indices:
             fallback_kw = cat_fallbacks[idx % len(cat_fallbacks)]
             fallback_scene = {"index": idx, "keywords": fallback_kw, "text": ""}
@@ -481,10 +826,10 @@ def get_scene_clips(scenes: list, category: str, clip_dur: float) -> list:
             results[idx] = path
 
     valid = [r for r in results if r is not None]
-    logger.info(f"   ðŸ“¦ Got {len(valid)}/{len(scenes)} clips successfully")
+    logger.info(f"   📦 Got {len(valid)}/{len(scenes)} clips successfully")
     return results  # keep None placeholders to maintain scene sync
 
-# â”€â”€â”€ INTRO / OUTRO SLATES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 def create_intro_slate(category: str, duration: float = 1.2) -> str:
     """Create an animated branded intro slate with category gradient + reveal animation."""
@@ -513,7 +858,7 @@ def create_intro_slate(category: str, duration: float = 1.2) -> str:
     ]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode != 0:
-        logger.warning(f"âš ï¸ Intro slate failed: {r.stderr[-200:]}")
+        logger.warning(f"⚠️ Intro slate failed: {r.stderr[-200:]}")
         return None
     return out_path
 
@@ -543,11 +888,11 @@ def create_outro_slate(category: str, duration: float = 2.5) -> str:
     ]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode != 0:
-        logger.warning(f"âš ï¸ Outro slate failed: {r.stderr[-200:]}")
+        logger.warning(f"⚠️ Outro slate failed: {r.stderr[-200:]}")
         return None
     return out_path
 
-# â”€â”€â”€ THUMBNAIL GENERATOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 def generate_thumbnail(video_abs: str, topic: str, category: str) -> str | None:
     """Extract sharpest frame from 3 candidates, add gradient bar + shadow title text."""
@@ -569,7 +914,7 @@ def generate_thumbnail(video_abs: str, topic: str, category: str) -> str | None:
             break
 
     if not extracted:
-        logger.warning("âš ï¸ Thumbnail: no frame extracted")
+        logger.warning("⚠️ Thumbnail: no frame extracted")
         return None
 
     cmd = [
@@ -588,15 +933,17 @@ def generate_thumbnail(video_abs: str, topic: str, category: str) -> str | None:
     ]
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode == 0:
-        logger.info(f"ðŸ–¼ï¸ Thumbnail: {thumb_name}")
+        logger.info(f"🖼️ Thumbnail: {thumb_name}")
         return f"storage/video/{thumb_name}"
-    logger.warning(f"âš ï¸ Thumbnail failed: {r.stderr[-200:]}")
+    logger.warning(f"⚠️ Thumbnail failed: {r.stderr[-200:]}")
     return None
 
-# â”€â”€â”€ CLIP PROCESSING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 def trim_and_grade_clip(clip_path: str, duration: float, color_grade: str, index: int, zoom_punch: bool = False, target_w: int = 1080, target_h: int = 1920, loop: bool = False) -> str | None:
     """Trim clip to duration, scale to target resolution, apply color grade + Ken Burns zoom."""
+    if isinstance(color_grade, (list, tuple)):
+        color_grade = "".join(color_grade)
     out = os.path.join(TMP_DIR, f"graded_{index}_{int(time.time())}.mp4")
     frames = max(int(duration * 30), 1)
     
@@ -632,7 +979,7 @@ def trim_and_grade_clip(clip_path: str, duration: float, color_grade: str, index
     if r.returncode == 0:
         return out
 
-    logger.warning(f"âš ï¸ Clip Ken Burns failed [{index}], retrying without zoom: {r.stderr[-200:]}")
+    logger.warning(f"⚠️ Clip Ken Burns failed [{index}], retrying without zoom: {r.stderr[-200:]}")
     # Fallback without zoompan in case of issues
     vf_simple = (
         f"pad=ceil(iw/2)*2:ceil(ih/2)*2,"
@@ -652,7 +999,7 @@ def trim_and_grade_clip(clip_path: str, duration: float, color_grade: str, index
     r2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r2.returncode == 0:
         return out
-    logger.error(f"âŒ Clip grade failed [{index}]: {r2.stderr[-300:]}")
+    logger.error(f"❌ Clip grade failed [{index}]: {r2.stderr[-300:]}")
     return None
 
 
@@ -710,7 +1057,7 @@ def concat_clips(trimmed: list) -> str:
         return out
 
     # Fallback: hard-cut concat
-    logger.warning(f"âš ï¸ xfade concat failed, falling back to hard-cut: {r.stderr[-200:]}")
+    logger.warning(f"⚠️ xfade concat failed, falling back to hard-cut: {r.stderr[-200:]}")
     concat_file = os.path.join(TMP_DIR, f"concat_{int(time.time())}.txt")
     with open(concat_file, "w") as f:
         for p in trimmed:
@@ -766,7 +1113,14 @@ def burn_subtitles_watermark_audio(
     else:
         ass_escaped = ass_posix
     sub_filter = f"ass='{ass_escaped}'"
-    wm_filter  = f"drawtext=text='{watermark}':fontcolor=white@0.55:fontsize=36:x=w-text_w-30:y=h-text_h-60"
+    letterbox_filter = (
+        "drawbox=x=0:y=0:w=iw:h=iw*0.088:color=black@1.0:t=fill,"
+        "drawbox=x=0:y=ih-iw*0.088:w=iw:h=iw*0.088:color=black@1.0:t=fill"
+    )
+    wm_filter = (
+        f"drawtext=text='{watermark}':fontcolor=white@0.55:fontsize=36:x=w-text_w-30:y=h-text_h-140,"
+        f"{letterbox_filter}"
+    )
 
     cmd = ["ffmpeg", "-y", "-i", to_posix(video_abs), "-i", to_posix(audio_abs)]
 
@@ -792,7 +1146,7 @@ def burn_subtitles_watermark_audio(
         to_posix(output_abs)
     ])
 
-    logger.info("ðŸ”¥ Final render: subtitles + watermark + progress bar + audio mix")
+    logger.info("🔥 Final render: subtitles + watermark + progress bar + audio mix")
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"FINAL_RENDER_FAILED: {r.stderr[-800:]}")
@@ -825,7 +1179,7 @@ def prepend_append_slates(main_video: str, intro: str | None, outro: str | None)
     r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if r.returncode == 0:
         return out
-    logger.warning(f"âš ï¸ Slate concat failed â€” returning main video: {r.stderr[-200:]}")
+    logger.warning(f"⚠️ Slate concat failed — returning main video: {r.stderr[-200:]}")
     return main_video
 
 
@@ -884,13 +1238,19 @@ def single_clip_video(bg_path: str, is_image: bool, duration: float,
     if r.returncode != 0:
         raise RuntimeError(f"SINGLE_CLIP_FAILED: {r.stderr[-600:]}")
 
-# â”€â”€â”€ HEALTH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——————————————————————————————————————————————————————————————————————————————
 
 @router.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "runway_key": bool(RUNWAYML_API_SECRET),
+        "kling_key": bool(KLING_ACCESS_KEY) and bool(KLING_SECRET_KEY),
+        "fal_key": bool(FAL_API_KEY)
+    }
 
-# â”€â”€â”€ MAIN ENDPOINT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+# ——————————————————————————————————————————————————————————————————————————————
 
 @router.post("/generate-video")
 def generate_video(data: VideoRequest):
@@ -899,11 +1259,11 @@ def generate_video(data: VideoRequest):
         color_grade = COLOR_GRADES.get(category, COLOR_GRADES["motivation"])
         watermark = WATERMARK_TEXT
 
-        logger.info(f"ðŸŽ¬ Video start | topic={data.topic} | category={category} | style={data.caption_style}")
+        logger.info(f"🎥 Video start | topic={data.topic} | category={category} | style={data.caption_style}")
         has_script = bool(data.script and len(data.script.strip()) > 10)
         logger.info(f"   Script provided: {has_script} ({len(data.script or '')} chars)")
 
-        # â”€â”€ Resolve paths â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ——— Resolve paths ————————————————————————————————————————————————————————————
         def resolve_storage_path(rel_path: str) -> str:
             p = rel_path.replace("\\", "/")
             if p.startswith("storage/"):
@@ -921,7 +1281,7 @@ def generate_video(data: VideoRequest):
         if not os.path.exists(subtitle_abs):
             raise FileNotFoundError(f"Subtitle file not found: {subtitle_abs}")
 
-        # â”€â”€ Generate ASS subtitles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ——— Generate ASS subtitles ———————————————————————————————————————————————————
         ass_abs = os.path.join(TMP_DIR, f"animated_{int(time.time())}.ass")
         generate_animated_ass(subtitle_abs, ass_abs, caption_style=data.caption_style)
         ass_rel = os.path.relpath(ass_abs, os.getcwd())
@@ -933,18 +1293,18 @@ def generate_video(data: VideoRequest):
         rendered_abs = os.path.join(TMP_DIR, f"rendered_{int(time.time())}.mp4")
         output_abs   = os.path.join(VIDEO_DIR, video_name)
 
-        # â”€â”€ Scene Planning & Micro-Clip Fetching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ——— Scene Planning & Micro-Clip Fetching ————————————————————————————————————
         scenes = []
         has_ai_plan = bool(data.scenes_json and data.scenes_json.strip())
 
         is_ai_video = (data.render_mode == "ai_video") or (category == "halku")
         is_avatar   = (data.render_mode == "avatar") and not is_ai_video
 
-        logger.info(f"ðŸ” DEBUG: render_mode='{data.render_mode}', category='{category}', is_ai_video={is_ai_video}, is_avatar={is_avatar}")
-        logger.info(f"ðŸ”‘ DEBUG: RUNWAYML_API_SECRET={'Set' if RUNWAYML_API_SECRET else 'MISSING'}")
+        logger.info(f"🔍 DEBUG: render_mode='{data.render_mode}', category='{category}', is_ai_video={is_ai_video}, is_avatar={is_avatar}")
+        logger.info(f"🔑 DEBUG: RUNWAYML_API_SECRET={'Set' if RUNWAYML_API_SECRET else 'MISSING'}")
 
         if RUNWAYML_API_SECRET and is_avatar and data.layout != "split":
-            logger.info("ðŸŽ¬ RunwayML Avatar Mode: Generating 1 continuous avatar clip for lip-sync")
+            logger.info("🎥 RunwayML Avatar Mode: Generating 1 continuous avatar clip for lip-sync")
             prompt = f"Cinematic portrait of a person looking directly at the camera and talking, dramatic lighting, photorealistic, {category} theme"
             if data.topic:
                 prompt += f", related to {data.topic}"
@@ -961,23 +1321,23 @@ def generate_video(data: VideoRequest):
                     data.caption_style = "halku"
 
             if has_ai_plan:
-                # âœ… PREFERRED: Use AI scene plan from script_ai
-                logger.info("ðŸŽ¯ Using AI scene plan (visual directions from script_ai)")
+                # ✅ PREFERRED: Use AI scene plan from script_ai
+                logger.info("🎯 Using AI scene plan (visual directions from script_ai)")
                 try:
                     scenes = parse_ai_scene_plan(data.scenes_json, target_clip_count=ideal_count)
                 except Exception as e:
-                    logger.warning(f"âš ï¸ AI scene plan parse failed ({e}), falling back to script segmentation")
+                    logger.warning(f"⚠️ AI scene plan parse failed ({e}), falling back to script segmentation")
                     scenes = []
 
             if not scenes and has_script:
                 # Fallback: segment script with stopword extraction
-                logger.info("ðŸ“‹ Falling back to script sentence segmentation")
+                logger.info("📋 Falling back to script sentence segmentation")
                 scenes = segment_script_to_scenes(data.script, category, target_clip_count=ideal_count)
 
             if not scenes:
                 # Last resort: generic category clips
                 ideal_count = max(6, int(duration / 4))
-                logger.info(f"ðŸ“¦ No script â€” fetching {ideal_count} generic category clips")
+                logger.info(f"📦 No script — fetching {ideal_count} generic category clips")
                 cat_kws = CATEGORY_KEYWORDS.get(category, CATEGORY_KEYWORDS["motivation"])
                 scenes = [
                     {"text": "", "keywords": cat_kws[i % len(cat_kws)], "mood": "inspiring", "index": i}
@@ -986,20 +1346,25 @@ def generate_video(data: VideoRequest):
 
             clip_dur = duration / max(len(scenes), 1)
             clip_dur = max(2.0, min(4.5, clip_dur))
-            logger.info(f"ðŸŽžï¸ {len(scenes)} scenes â†’ {clip_dur:.1f}s each (audio={duration:.1f}s)")
-            raw_clips = get_scene_clips(scenes, category, clip_dur)
+            logger.info(f"🎞️ {len(scenes)} scenes → {clip_dur:.1f}s each (audio={duration:.1f}s)")
+            raw_clips = get_scene_clips(
+                scenes, 
+                category, 
+                clip_dur,
+                force_ai=(is_ai_video and bool(RUNWAYML_API_SECRET))
+            )
         else:
             raw_clips = []
 
         is_split = (data.layout.lower() == "split")
         target_h = 960 if is_split else 1920
 
-        # â”€â”€ RENDER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ——— RENDER ———————————————————————————————————————————————————————————————————
         valid_clips = [(i, p) for i, p in enumerate(raw_clips) if p is not None]
 
         raw_concat = None
         if len(valid_clips) >= 2:
-            logger.info(f"ðŸŽ¬ MULTI-CLIP mode ({len(valid_clips)} clips) | split={is_split} | ai_plan={has_ai_plan}")
+            logger.info(f"🎥 MULTI-CLIP mode ({len(valid_clips)} clips) | split={is_split} | ai_plan={has_ai_plan}")
             clip_dur_real = duration / len(valid_clips)
             clip_dur_real = max(2.0, min(5.0, clip_dur_real))
 
@@ -1021,7 +1386,7 @@ def generate_video(data: VideoRequest):
                 raw_concat = valid_clips[0][1]
 
         elif len(valid_clips) == 1:
-            logger.info(f"ðŸŽžï¸ SINGLE-CLIP mode | split={is_split}")
+            logger.info(f"🎞️ SINGLE-CLIP mode | split={is_split}")
             raw_concat = trim_and_grade_clip(valid_clips[0][1], duration, color_grade, 0, target_h=target_h, loop=True)
 
         elif data.background_url:
@@ -1033,11 +1398,11 @@ def generate_video(data: VideoRequest):
                         f.write(chunk)
                 raw_concat = trim_and_grade_clip(bg_path, duration, color_grade, 0, target_h=target_h)
             except Exception as e:
-                logger.error(f"âŒ External clip failed: {e}")
+                logger.error(f"❌ External clip failed: {e}")
                 bg_img = get_fallback_image(data.topic)
                 raw_concat = trim_and_grade_clip(bg_img, duration, color_grade, 0, target_h=target_h)
         else:
-            logger.info("ðŸ–¼ï¸ FALLBACK IMAGE mode")
+            logger.info("🖼️ FALLBACK IMAGE mode")
             bg_img = get_fallback_image(data.topic)
             raw_concat = trim_and_grade_clip(bg_img, duration, color_grade, 0, target_h=target_h)
             
@@ -1048,14 +1413,14 @@ def generate_video(data: VideoRequest):
                 # Grade the bottom clip to match target_h without specific zoompunch
                 bot_graded = trim_and_grade_clip(bot_clip, duration, "eq=contrast=1.05", 999, target_h=target_h)
                 if bot_graded:
-                    logger.info("ðŸ”¥ Combining split-screen vstack layout")
+                    logger.info("🔥 Combining split-screen vstack layout")
                     raw_concat = combine_split_screen(raw_concat, bot_graded, duration)
             
         # Final pass: burn everything
         if raw_concat:
             burn_subtitles_watermark_audio(raw_concat, audio_abs, music_abs, ass_rel, duration, watermark, rendered_abs)
 
-        # â”€â”€ INTRO + OUTRO SLATES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ——— INTRO + OUTRO SLATES —————————————————————————————————————————————————————
         intro = create_intro_slate(category, duration=0.7)
         outro = create_outro_slate(category, duration=1.8)
         final_with_slates = prepend_append_slates(rendered_abs, intro, outro)
@@ -1063,10 +1428,10 @@ def generate_video(data: VideoRequest):
         import shutil
         shutil.copy2(final_with_slates, output_abs)
 
-        # â”€â”€ THUMBNAIL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ——— THUMBNAIL ————————————————————————————————————————————————————————————————
         thumb_rel = generate_thumbnail(output_abs, data.topic, category)
 
-        logger.info(f"âœ… Video done: {video_name}")
+        logger.info(f"✅ Video done: {video_name}")
         return {
             "success": True,
             "video_path": f"storage/video/{video_name}",
@@ -1074,22 +1439,26 @@ def generate_video(data: VideoRequest):
         }
 
     except Exception as e:
-        logger.exception("âŒ Video generation error")
+        logger.exception("❌ Video generation error")
         return {"success": False, "error_code": "VIDEO_AI_FAILED", "message": str(e)}
 
 @router.post("/generate-raw-clip")
 def generate_raw_clip_endpoint(data: RawVideoRequest):
     """
-    Direct prompt-to-video endpoint using RunwayML.
+    Direct prompt-to-video endpoint using Kling AI (with RunwayML fallback).
     Bypasses script generation, TTS, and FFmpeg composition.
     """
-    logger.info(f"ðŸŽ¬ Raw prompt-to-video request: '{data.prompt}' ({data.duration}s)")
+    logger.info(f"🎥 Raw prompt-to-video request: '{data.prompt}' ({data.duration}s)")
     scene_data = {"index": 999, "keywords": data.prompt}
     try:
-        vid_path = generate_runway_clip(scene_data, data.duration, set())
-        
+        # Try Kling first, then Runway
+        vid_path = generate_kling_clip(scene_data, data.duration, set())
         if not vid_path:
-            logger.info("âš¡ Runway failed or skipped, falling back to Pexels...")
+            logger.info("⚡ Kling failed or skipped, falling back to Runway...")
+            vid_path = generate_runway_clip(scene_data, data.duration, set())
+            
+        if not vid_path:
+            logger.info("⚡ Runway failed or skipped, falling back to Pexels...")
             vid_path = fetch_single_clip(scene_data, data.duration, set())
             
             # Trim the Pexels clip to exact requested duration using FFmpeg
@@ -1107,21 +1476,21 @@ def generate_raw_clip_endpoint(data: RawVideoRequest):
                     vid_path = trimmed_path
 
         if vid_path:
-            # Reformat to match storage mapping (assuming backend serves storage/tmp)
             filename = os.path.basename(vid_path)
+            provider_msg = "Generated using Kling AI" if "kling" in vid_path else ("Generated using RunwayML" if "runway" in vid_path else "Generated using Stock Fallback")
             return {
                 "success": True,
                 "video_path": f"storage/tmp/{filename}",
-                "message": "Generated using Stock Fallback" if "runway" not in vid_path else "Generated using RunwayML"
+                "message": provider_msg
             }
         else:
             return {"success": False, "error_code": "GENERATION_FAILED", "message": "Both RunwayML and Stock fallback failed"}
     except Exception as e:
-        logger.exception("âŒ Raw video generation error")
+        logger.exception("❌ Raw video generation error")
         return {"success": False, "error_code": "RAW_VIDEO_FAILED", "message": str(e)}
 
 
-# â”€â”€â”€ FULL PIPELINE: img2video + render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ——— FULL PIPELINE: img2video + render —————————————————————————————————————————————
 
 class RenderFullRequest(BaseModel):
     images: list[dict]          # [{scene_index, image_path, imagePrompt, duration_s}]
@@ -1136,7 +1505,7 @@ class RenderFullRequest(BaseModel):
 def render_full(data: RenderFullRequest):
     """
     Stage 4 + 7 combined:
-    - For each image: call RunwayML Gen-3 img2video â†’ 5s clip
+    - For each image: call RunwayML Gen-3 img2video → 5s clip
     - Concatenate all clips
     - Mix ElevenLabs voice + Suno background music
     - Burn in subtitles
@@ -1146,7 +1515,7 @@ def render_full(data: RenderFullRequest):
         category = data.category.lower().strip()
         color_grade = COLOR_GRADES.get(category, COLOR_GRADES["motivation"])
 
-        logger.info(f"ðŸŽ¬ [Stage 4+7] render-full | {len(data.images)} images | topic: {data.topic}")
+        logger.info(f"🎥 [Stage 4+7] render-full | {len(data.images)} images | topic: {data.topic}")
 
         # 1. Validate audio + subtitle paths
         audio_abs = data.audio_path if os.path.isabs(data.audio_path) else os.path.join(PROJECT_ROOT, "backend", data.audio_path)
@@ -1157,32 +1526,75 @@ def render_full(data: RenderFullRequest):
 
         audio_duration = get_audio_duration(audio_abs)
 
-        # 2. Convert each SDXL image â†’ video clip via RunwayML (Stage 4)
+        # 2. Convert each SDXL image → video clip via RunwayML (Stage 4)
         clip_paths = []
         for img_data in sorted(data.images, key=lambda x: x.get("scene_index", 0)):
             if not img_data.get("image_path") or not os.path.exists(img_data["image_path"]):
-                logger.warning(f"  âš ï¸ Skipping missing image: {img_data.get('image_path')}")
+                logger.warning(f"  ⚠️ Skipping missing image: {img_data.get('image_path')}")
                 continue
 
             try:
-                logger.info(f"  ðŸŽ¥ RunwayML img2video: scene {img_data.get('scene_index', '?')}")
+                logger.info(f"  🎥 RunwayML img2video: scene {img_data.get('scene_index', '?')}")
                 clip = _image_to_video_runway(
                     image_path=img_data["image_path"],
                     prompt=img_data.get("imagePrompt", f"cinematic {data.topic}"),
                     scene_idx=img_data.get("scene_index", len(clip_paths)),
                     clip_dur=img_data.get("duration_s", 5)
                 )
+                if not clip:
+                    logger.warning(f"  ⚠️ RunwayML returned None for scene {img_data.get('scene_index')}. Using local image-to-video fallback.")
+                    fallback_clip = os.path.join(TMP_DIR, f"fallback_clip_{img_data.get('scene_index')}_{int(time.time())}.mp4")
+                    fallback_duration = img_data.get("duration_s", 5)
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-loop", "1",
+                        "-i", to_posix(img_data["image_path"]),
+                        "-t", str(fallback_duration),
+                        "-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1",
+                        "-preset", "veryfast",
+                        "-c:v", "libx264",
+                        "-an",
+                        "-pix_fmt", "yuv420p",
+                        to_posix(fallback_clip)
+                    ]
+                    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if r.returncode == 0:
+                        clip = fallback_clip
+
                 if clip:
                     clip_paths.append(clip)
-                    logger.info(f"  âœ… Scene {img_data.get('scene_index')}: {os.path.basename(clip)}")
+                    logger.info(f"  ✅ Scene {img_data.get('scene_index')}: {os.path.basename(clip)}")
             except Exception as e:
-                logger.error(f"  âŒ RunwayML failed for scene {img_data.get('scene_index')}: {e}")
+                logger.error(f"  ❌ RunwayML failed for scene {img_data.get('scene_index')}: {e}")
+                # Try fallback inside exception handler as well
+                try:
+                    logger.warning(f"  ⚠️ RunwayML failed for scene {img_data.get('scene_index')}. Trying local fallback.")
+                    fallback_clip = os.path.join(TMP_DIR, f"fallback_clip_{img_data.get('scene_index')}_{int(time.time())}.mp4")
+                    fallback_duration = img_data.get("duration_s", 5)
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-loop", "1",
+                        "-i", to_posix(img_data["image_path"]),
+                        "-t", str(fallback_duration),
+                        "-vf", "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1",
+                        "-preset", "veryfast",
+                        "-c:v", "libx264",
+                        "-an",
+                        "-pix_fmt", "yuv420p",
+                        to_posix(fallback_clip)
+                    ]
+                    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if r.returncode == 0:
+                        clip_paths.append(fallback_clip)
+                        logger.info(f"  ✅ Scene {img_data.get('scene_index')} fallback succeeded: {os.path.basename(fallback_clip)}")
+                except Exception as ex:
+                    logger.error(f"  ❌ Fallback failed for scene {img_data.get('scene_index')}: {ex}")
 
         if not clip_paths:
-            raise Exception("No video clips generated â€” all RunwayML calls failed")
+            raise Exception("No video clips generated — all RunwayML calls failed")
 
         # 3. Concatenate clips (Stage 7)
-        logger.info(f"ðŸŽžï¸ Concatenating {len(clip_paths)} clips...")
+        logger.info(f"🎞️ Concatenating {len(clip_paths)} clips...")
         concat_path = os.path.join(TMP_DIR, f"concat_{int(time.time())}.mp4")
 
         # Each clip: scale to 720x1280, trim to equal duration
@@ -1217,7 +1629,7 @@ def render_full(data: RenderFullRequest):
 
         # 4. Mix voice + Suno background music
         music_abs = get_music_path(category)
-        logger.info(f"ðŸŽµ Music: {music_abs}")
+        logger.info(f"🎵 Music: {music_abs}")
 
         # 5. Generate ASS subtitles
         ass_path = os.path.join(TMP_DIR, f"subs_{int(time.time())}.ass")
@@ -1277,7 +1689,7 @@ def render_full(data: RenderFullRequest):
                 output_abs
             ]
 
-        logger.info("ðŸŽ¬ Final render starting...")
+        logger.info("🎥 Final render starting...")
         r = subprocess.run(cmd_render, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if r.returncode != 0:
             raise RuntimeError(f"FFmpeg render failed: {r.stderr[-600:]}")
@@ -1291,7 +1703,7 @@ def render_full(data: RenderFullRequest):
             "-vf", "scale=720:1280", thumb_abs
         ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        logger.info(f"âœ… [Stage 7] render-full done: {video_name}")
+        logger.info(f"✅ [Stage 7] render-full done: {video_name}")
         return {
             "success": True,
             "video_path": f"storage/video/{video_name}",
@@ -1301,7 +1713,7 @@ def render_full(data: RenderFullRequest):
         }
 
     except Exception as e:
-        logger.exception("âŒ render-full error")
+        logger.exception("❌ render-full error")
         return {"success": False, "message": str(e)}
 
 
@@ -1311,7 +1723,7 @@ def _image_to_video_runway(image_path: str, prompt: str, scene_idx: int, clip_du
     Returns local file path or None on failure.
     """
     if not RUNWAY_CLIENT:
-        logger.warning(f"  âš ï¸ RunwayML not configured â€” skipping scene {scene_idx}")
+        logger.warning(f"  ⚠️ RunwayML not configured — skipping scene {scene_idx}")
         return None
 
     try:
@@ -1331,8 +1743,7 @@ def _image_to_video_runway(image_path: str, prompt: str, scene_idx: int, clip_du
             prompt_image=img_uri,
             prompt_text=prompt[:500],
             duration=duration_val,
-            ratio="720:1280",
-            watermark=False,
+            ratio="768:1280",
         )
         task_id = task.id
 
@@ -1359,5 +1770,105 @@ def _image_to_video_runway(image_path: str, prompt: str, scene_idx: int, clip_du
         return vid_path
 
     except Exception as e:
-        logger.error(f"  âŒ RunwayML img2video failed: {e}")
+        logger.error(f"  ❌ RunwayML img2video failed: {e}")
         return None
+
+
+class CinematicRequest(BaseModel):
+    scenes: list
+    category: str = "storytelling"
+    topic: str = ""
+    duration: int = 30
+
+@router.post("/generate-cinematic-clip")
+def generate_cinematic_clip(data: CinematicRequest):
+    try:
+        category = data.category.lower()
+        color_grade = COLOR_GRADES.get(category, COLOR_GRADES["storytelling"])
+        
+        logger.info(f"🎬 Pure Cinematic Mode | {len(data.scenes)} scenes | topic: {data.topic}")
+
+        # Build scene dicts for Kling V3
+        scenes = []
+        for s in data.scenes:
+            scenes.append({
+                "index": s.get("index", 0),
+                "text": s.get("text", ""),
+                "visual": s.get("visual") or s.get("imagePrompt") or data.topic,
+                "mood": s.get("mood", "inspiring"),
+                "hero": s.get("hero", False),
+                "keywords": s.get("visual") or data.topic
+            })
+
+        clip_dur = max(4.0, min(8.0, data.duration / max(len(scenes), 1)))
+
+        # ALL scenes → Kling V3 primary provider chain (force_ai=True)
+        raw_clips = get_scene_clips(
+            scenes, category, clip_dur, force_ai=True
+        )
+
+        valid_clips = [(i, p) for i, p in enumerate(raw_clips) if p is not None]
+
+        if not valid_clips:
+            raise Exception("All cinematic AI providers failed (Kling fal.ai → Kling direct → Runway)")
+
+        # Grade + trim each clip
+        trimmed = []
+        for idx, (orig_i, clip_path) in enumerate(valid_clips):
+            mood = scenes[orig_i].get("mood", "inspiring")
+            grade = MOOD_GRADES.get(mood, color_grade)
+            if isinstance(grade, tuple):
+                grade = "".join(grade)
+            if isinstance(color_grade, tuple):
+                grade = "".join(color_grade)
+            t = trim_and_grade_clip(
+                clip_path, clip_dur, grade, idx,
+                zoom_punch=(idx % 3 == 2),
+                target_w=1080, target_h=1920
+            )
+            if t:
+                trimmed.append(t)
+
+        if not trimmed:
+            raise Exception("No clips survived grading")
+
+        # Concat all clips
+        concat = concat_clips(trimmed) if len(trimmed) > 1 else trimmed[0]
+
+        # Add cinematic letterbox only (no audio/subtitles)
+        video_name = f"cinematic_{int(time.time())}.mp4"
+        output_abs = os.path.join(VIDEO_DIR, video_name)
+
+        letterbox = (
+            "drawbox=x=0:y=0:w=iw:h=iw*0.088:color=black@1.0:t=fill,"
+            "drawbox=x=0:y=ih-iw*0.088:w=iw:h=iw*0.088:color=black@1.0:t=fill"
+        )
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", to_posix(concat),
+            "-vf", letterbox,
+            "-t", str(data.duration),
+            "-c:v", "libx264", "-preset", "fast",
+            "-pix_fmt", "yuv420p",
+            to_posix(output_abs)
+        ]
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"Final render failed: {r.stderr[-400:]}")
+
+        # Thumbnail
+        thumb_rel = generate_thumbnail(output_abs, data.topic, category)
+
+        logger.info(f"✅ Cinematic video ready: {video_name}")
+        return {
+            "success": True,
+            "video_path": f"storage/video/{video_name}",
+            "thumbnail_path": thumb_rel
+        }
+
+    except Exception as e:
+        logger.exception("❌ Cinematic clip error")
+        return {"success": False, "message": str(e)}
+
+app.include_router(router)

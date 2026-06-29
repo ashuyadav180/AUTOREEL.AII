@@ -2,13 +2,13 @@ import axios from "axios";
 import path from "path";
 import { generateLipSync } from "./synclabs.service.js";
 
-/* AI service URLs — match start_services.bat port assignments */
-const SCRIPT_AI_URL   = "http://127.0.0.1:8001";   // Script AI  → port 8001
-const VOICE_AI_URL    = "http://127.0.0.1:8002";   // Voice AI   → port 8002
-const SUBTITLE_AI_URL = "http://127.0.0.1:8003";   // Subtitle AI → port 8003
-const VIDEO_AI_URL    = "http://127.0.0.1:8004";   // Video AI   → port 8004
+/* AI service URLs â€” match start_services.bat port assignments */
+const SCRIPT_AI_URL   = process.env.SCRIPT_AI_URL || "http://127.0.0.1:8005";
+const VOICE_AI_URL    = process.env.VOICE_AI_URL || "http://127.0.0.1:8002";
+const SUBTITLE_AI_URL = process.env.SUBTITLE_AI_URL || "http://127.0.0.1:8003";
+const VIDEO_AI_URL    = process.env.VIDEO_AI_URL || "http://127.0.0.1:8004";
 
-const axiosInstance = axios.create({ timeout: 900000 }); // 15min — AI generation is slow
+const axiosInstance = axios.create({ timeout: 900000 }); // 15min â€” AI generation is slow
 
 const PROJECT_ROOT = path.resolve(process.cwd(), "..");
 
@@ -35,7 +35,7 @@ const assertPath = (value, label) => {
 /* ---------- PIPELINE ---------- */
 /**
  * Full Vid.AI-style pipeline:
- * Script AI → Voice AI → Subtitle AI → Video AI
+ * Script AI â†’ Voice AI â†’ Subtitle AI â†’ Video AI
  *
  * @param {Object} payload
  * @param {string} payload.topic       - Topic of the video
@@ -57,8 +57,8 @@ export const generateReelPipeline = async ({
   render_mode = "stock",
 }) => {
   try {
-    /* ── STEP 1: SCRIPT ─────────────────────────────────────────────── */
-    console.log(`📜 [1/4] Generating script for "${topic}" [${category}] ${duration}s`);
+    /* â”€â”€ STEP 1: SCRIPT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    console.log(`ðŸ“œ [1/4] Generating script for "${topic}" [${category}] ${duration}s`);
     const scriptRes = await axiosInstance.post(
       `${SCRIPT_AI_URL}/generate-script`,
       { topic, category, duration }
@@ -72,10 +72,10 @@ export const generateReelPipeline = async ({
     const scenes     = scriptRes.data.scenes || [];   // AI scene plan (Phase 2)
     const hook       = scriptRes.data.hook   || "";
 
-    console.log(`✅ Script done (${script.length} chars, ${scenes.length} scenes)`);
+    console.log(`âœ… Script done (${script.length} chars, ${scenes.length} scenes)`);
 
-    /* ── STEP 2: VOICE ──────────────────────────────────────────────── */
-    console.log(`🗣️  [2/4] Generating voice [${language}/${gender}]`);
+    /* â”€â”€ STEP 2: VOICE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    console.log(`ðŸ—£ï¸  [2/4] Generating voice [${language}/${gender}]`);
     const voiceRes = await axiosInstance.post(
       `${VOICE_AI_URL}/generate-voice`,
       { text: script, language, gender }
@@ -83,10 +83,10 @@ export const generateReelPipeline = async ({
 
     assertPath(voiceRes.data?.audio_path, "AUDIO");
     const audioPath = voiceRes.data.audio_path;
-    console.log(`✅ Voice done: ${audioPath}`);
+    console.log(`âœ… Voice done: ${audioPath}`);
 
-    /* ── STEP 3: SUBTITLES ──────────────────────────────────────────── */
-    console.log(`📝 [3/4] Generating subtitles`);
+    /* â”€â”€ STEP 3: SUBTITLES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    console.log(`ðŸ“ [3/4] Generating subtitles`);
     const subtitleRes = await axiosInstance.post(
       `${SUBTITLE_AI_URL}/generate-subtitles`,
       { text: ensureMinText(script) }
@@ -94,12 +94,12 @@ export const generateReelPipeline = async ({
 
     assertPath(subtitleRes.data?.subtitle_path, "SUBTITLE");
     const subtitlePath = subtitleRes.data.subtitle_path;
-    console.log(`✅ Subtitles done: ${subtitlePath}`);
+    console.log(`âœ… Subtitles done: ${subtitlePath}`);
 
-    /* ── STEP 4: VIDEO ──────────────────────────────────────────────── */
-    console.log(`🎬 [4/4] Generating video [layout=${layout}]`);
+    /* â”€â”€ STEP 4: VIDEO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+    console.log(`ðŸŽ¬ [4/4] Generating video [layout=${layout}]`);
 
-    // Build video payload — pass all context including AI scene plan
+    // Build video payload â€” pass all context including AI scene plan
     const videoPayload = {
       topic,
       category,
@@ -108,7 +108,7 @@ export const generateReelPipeline = async ({
       audio_path:    normalizePath(audioPath),
       subtitle_path: normalizePath(subtitlePath),
       render_mode,                   // stock | ai_video
-      script,                        // full script → scene segmentation fallback
+      script,                        // full script â†’ scene segmentation fallback
       scenes_json:   scenes.length > 0 ? JSON.stringify(scenes) : null,  // AI scene plan
     };
 
@@ -124,28 +124,28 @@ export const generateReelPipeline = async ({
     assertPath(videoRes.data?.video_path, "VIDEO");
     const videoPath      = videoRes.data.video_path;
     const thumbnailPath  = videoRes.data.thumbnail_path || null;
-    console.log(`✅ Video done: ${videoPath}`);
+    console.log(`âœ… Video done: ${videoPath}`);
 
-    /* ── STEP 5: LIP SYNC ───────────────────────────────────────────── */
+    /* â”€â”€ STEP 5: LIP SYNC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
     let finalVideoPath = videoPath;
     if (process.env.SYNCLABS_API_KEY && process.env.PUBLIC_BASE_URL) {
-      console.log(`👄 [5/5] Generating Lip Sync (SyncLabs)`);
-      const baseUrl = process.env.PUBLIC_BASE_URL.replace(/\/$/, ""); 
+      console.log(`ðŸ‘„ [5/5] Generating Lip Sync (SyncLabs)`);
+      const baseUrl = process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
       const publicVideoUrl = `${baseUrl}/${videoPath}`;
       const publicAudioUrl = `${baseUrl}/${audioPath}`;
-      
+
       try {
         const syncRes = await generateLipSync(publicVideoUrl, publicAudioUrl);
         if (syncRes.success && syncRes.localVideoPath) {
-          finalVideoPath = syncRes.localVideoPath; 
+          finalVideoPath = syncRes.localVideoPath;
         }
       } catch(e) {
-         console.warn("⚠️ Lip sync failed, falling back to original video:", e.message);
+         console.warn("âš ï¸ Lip sync failed, falling back to original video:", e.message);
       }
     } else if (process.env.SYNCLABS_API_KEY) {
-      console.warn("⚠️ SYNCLABS_API_KEY is set but PUBLIC_BASE_URL is missing! Skipping Lip Sync. (Use ngrok for local testing)");
+      console.warn("âš ï¸ SYNCLABS_API_KEY is set but PUBLIC_BASE_URL is missing! Skipping Lip Sync. (Use ngrok for local testing)");
     } else {
-      console.log("ℹ️  Skipping Lip Sync (SyncLabs API key not configured)");
+      console.log("â„¹ï¸  Skipping Lip Sync (SyncLabs API key not configured)");
     }
 
     return {
@@ -161,7 +161,7 @@ export const generateReelPipeline = async ({
 
   } catch (err) {
     console.error(
-      "❌ ORCHESTRATOR ERROR:",
+      "âŒ ORCHESTRATOR ERROR:",
       err.response?.data || err.message
     );
     throw err;

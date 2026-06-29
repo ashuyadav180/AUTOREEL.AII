@@ -1,5 +1,6 @@
 import { Worker } from "worker_threads";
 import path from "path";
+import fs from "fs";
 import {
   updateJob,
   failJob,
@@ -10,6 +11,26 @@ import {
 } from "./job.store.js";
 
 import { getIO } from "../io-singleton.js";
+import { sendVideoReadyEmail, sendVideoFailedEmail } from "../services/emailService.js";
+
+const getCreatorProfile = () => {
+  try {
+    const profilePath = path.join(process.cwd(), "storage", "user_profile.json");
+    if (fs.existsSync(profilePath)) {
+      const data = JSON.parse(fs.readFileSync(profilePath, "utf-8"));
+      return {
+        email: data.email || "creator@autoreel.ai",
+        displayName: data.displayName || "AutoReel Creator"
+      };
+    }
+  } catch (err) {
+    console.error("Error reading user profile for email:", err);
+  }
+  return {
+    email: "creator@autoreel.ai",
+    displayName: "AutoReel Creator"
+  };
+};
 
 const MAX_RETRIES = 3;
 
@@ -45,6 +66,14 @@ class JobQueue {
   }
 
   cancelJob(jobId) {
+    // 1. Remove from pending queue if it is still waiting
+    const initialLength = this.queue.length;
+    this.queue = this.queue.filter(j => j.id !== jobId);
+    if (this.queue.length < initialLength) {
+        console.log(`🛑 Removed job ${jobId} from pending queue`);
+    }
+
+    // 2. Terminate active worker if running
     const worker = this.activeWorkers.get(jobId);
     if (worker) {
         console.log(`🛑 Terminating worker for cancelled job: ${jobId}`);
@@ -70,6 +99,13 @@ export const runJob = async (job) => {
   }
 
   return new Promise((resolve, reject) => {
+    let finished = false;
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      resolve(result);
+    };
+
     console.log(`🚀 Job started (Worker): ${jobId} | topic="${job.topic}"`);
 
     updateJob(jobId, { status: "RUNNING", startedAt: Date.now() });
@@ -92,20 +128,60 @@ export const runJob = async (job) => {
           break;
 
         case "youtube":
+          {
+            const current = getJob(jobId);
+            const output = { ...(current?.output || {}), ...msg.data };
+            updateJob(jobId, {
+              output,
+              currentStep: "Uploaded to YouTube",
+              percent: 100,
+              lastError: null
+            });
+            io.emit("job:update", { jobId, status: "COMPLETED", output });
+          }
           io.emit("job:youtube", { jobId, ...msg.data });
+          break;
+
+        case "youtube_failed":
+          updateJob(jobId, {
+            currentStep: "Video ready - YouTube upload failed",
+            percent: 100,
+            lastError: msg.error
+          });
+          io.emit("job:update", { jobId, status: "COMPLETED", error: msg.error });
           break;
 
         case "completed":
           completeJob(jobId, { output: msg.result, completedAt: Date.now() });
           io.emit("job:update", { jobId, status: "COMPLETED", output: msg.result });
           queue.activeWorkers.delete(jobId);
-          resolve(msg.result);
+          
+          // Send video ready notification email asynchronously
+          (async () => {
+            try {
+              const profile = getCreatorProfile();
+              const videoTitle = msg.result.title || job.topic;
+              const niche = msg.result.category || job.category || "General";
+              
+              let videoUrl = msg.result.video || "";
+              if (videoUrl && !videoUrl.startsWith("http")) {
+                const baseUrl = process.env.PUBLIC_BASE_URL || "http://localhost:5000";
+                videoUrl = `${baseUrl}/${videoUrl}`;
+              }
+              
+              await sendVideoReadyEmail(profile.email, profile.displayName, videoTitle, videoUrl, niche);
+            } catch (err) {
+              console.error(`[Email Notification] Error sending video ready email for job ${jobId}:`, err.message);
+            }
+          })();
+
+          finish(msg.result);
           break;
 
         case "failed":
           handleFailure(jobId, msg.error);
           queue.activeWorkers.delete(jobId);
-          resolve(null);
+          finish(null);
           break;
       }
     });
@@ -114,7 +190,7 @@ export const runJob = async (job) => {
       console.error(`❌ Worker error [${jobId}]:`, err.message);
       handleFailure(jobId, err.message);
       queue.activeWorkers.delete(jobId);
-      resolve(null);
+      finish(null);
     });
 
     worker.on("exit", (code) => {
@@ -127,6 +203,7 @@ export const runJob = async (job) => {
         }
       }
       queue.activeWorkers.delete(jobId);
+      finish(null);
     });
   });
 };
@@ -143,6 +220,18 @@ const handleFailure = (jobId, errorMessage) => {
   if (isPermanent || retries > MAX_RETRIES) {
     failJob(jobId, { status: "FAILED", lastError: errorMessage, failedAt: Date.now() });
     io.emit("job:update", { jobId, status: "FAILED", error: errorMessage });
+    
+    // Send video failed notification email asynchronously
+    (async () => {
+      try {
+        const profile = getCreatorProfile();
+        const jobDetails = getJob(jobId);
+        const videoTopic = jobDetails?.topic || "AI Video Job";
+        await sendVideoFailedEmail(profile.email, profile.displayName, videoTopic, errorMessage);
+      } catch (err) {
+        console.error(`[Email Notification] Error sending video failed email for job ${jobId}:`, err.message);
+      }
+    })();
   } else {
     updateJob(jobId, { status: "PAUSED", lastError: errorMessage });
     io.emit("job:update", { jobId, status: "PAUSED", retries });

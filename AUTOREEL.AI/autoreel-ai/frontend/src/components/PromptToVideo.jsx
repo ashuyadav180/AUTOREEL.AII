@@ -15,23 +15,30 @@ const CARD = {
   overflow: "hidden",
 };
 
-export default function PromptToVideo() {
+export default function PromptToVideo({
+  duration, setDuration,
+  prompt, setPrompt,
+  suggestions, setSuggestions,
+  loading, setLoading,
+  enhancing, setEnhancing,
+  suggesting, setSuggesting,
+  generationType, setGenerationType,
+  renderMode, setRenderMode,
+  language, setLanguage,
+  voiceGender, setVoiceGender,
+  currentJob, setCurrentJob,
+  generatedVideo, setGeneratedVideo,
+  uploading, setUploading,
+  youtubeUrl, setYoutubeUrl,
+  uploadDone, setUploadDone,
+  ytConnected, setYtConnected,
+  enableVoice, setEnableVoice,
+  enableSubtitles, setEnableSubtitles,
+  scriptPreview, setScriptPreview,
+  showPreview, setShowPreview
+}) {
   const { showToast } = useToast();
   const { connected, lastUpdate } = useSocket();
-  const [duration, setDuration] = useState(60);
-  const [prompt, setPrompt] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [enhancing, setEnhancing] = useState(false);
-  const [suggesting, setSuggesting] = useState(false);
-  const [generationType, setGenerationType] = useState("REEL");
-  const [currentJob, setCurrentJob] = useState(null);
-  const [generatedVideo, setGeneratedVideo] = useState(null);
-  const [uploading, setUploading] = useState(false);
-
-  // ── Enhanced script preview state ──────────────────────────────────────
-  const [scriptPreview, setScriptPreview] = useState(null); // { enhancedPrompt, script, hook }
-  const [showPreview, setShowPreview] = useState(false);
 
   const durations = [15, 30, 60, 90];
   const textareaRef = useRef(null);
@@ -43,6 +50,13 @@ export default function PromptToVideo() {
       textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
     }
   }, [prompt]);
+
+  // ── Check YouTube connection on mount ─────────────────────────────────
+  useEffect(() => {
+    axios.get(`${API}/api/youtube/status`)
+      .then(r => setYtConnected(r.data?.connected ?? false))
+      .catch(() => setYtConnected(false));
+  }, []);
 
   // ── Debounced suggestions ─────────────────────────────────────────────
   useEffect(() => {
@@ -64,7 +78,7 @@ export default function PromptToVideo() {
   useEffect(() => {
     if (!lastUpdate || !currentJob) return;
 
-    if (lastUpdate.type === "update" && (lastUpdate.id === currentJob.id || lastUpdate.jobId === currentJob.id)) {
+    if ((lastUpdate.type === "update" || lastUpdate.type === "progress") && (lastUpdate.id === currentJob.id || lastUpdate.jobId === currentJob.id)) {
         setCurrentJob(prev => ({ ...prev, ...lastUpdate }));
         
         if (lastUpdate.status === "COMPLETED") {
@@ -73,10 +87,44 @@ export default function PromptToVideo() {
             showToast("success", "🎬", "Video generation complete!");
         } else if (lastUpdate.status === "FAILED") {
             setLoading(false);
-            showToast("error", "✕", lastUpdate.lastError || "Generation failed");
+            showToast("error", "✕", lastUpdate.lastError || lastUpdate.error || "Generation failed");
+        } else if (lastUpdate.status === "CANCELLED") {
+            setLoading(false);
+            showToast("info", "🛑", "Generation cancelled");
         }
     }
   }, [lastUpdate]);
+
+  // Fallback polling keeps the UI honest if a WebSocket event is missed during
+  // a long render, backend restart, or upload failure.
+  useEffect(() => {
+    if (!loading || !currentJob?.id) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await axios.get(`${API}/api/jobs/${currentJob.id}`);
+        const job = res.data?.job;
+        if (!job) return;
+
+        setCurrentJob(prev => ({ ...prev, ...job }));
+
+        if (job.status === "COMPLETED") {
+          setGeneratedVideo(job.output?.video);
+          setLoading(false);
+          showToast("success", "✓", "Video generation complete!");
+        } else if (job.status === "FAILED") {
+          setLoading(false);
+          showToast("error", "×", job.lastError || "Generation failed");
+        } else if (job.status === "CANCELLED") {
+          setLoading(false);
+        }
+      } catch {
+        // Keep the render running; the next poll/socket update may recover.
+      }
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [loading, currentJob?.id, showToast]);
 
   /* ── Handlers ─────────────────────────────────────────────────────────── */
 
@@ -92,6 +140,7 @@ export default function PromptToVideo() {
         prompt,
         duration,
         category: "motivation",
+        language,
       });
       if (res.data.success) {
         setScriptPreview({
@@ -120,12 +169,19 @@ export default function PromptToVideo() {
     setGeneratedVideo(null);
     setCurrentJob(null);
     setShowPreview(false);
+    setYoutubeUrl(null);
+    setUploadDone(false);
     try {
       const res = await axios.post(`${API}/api/jobs`, {
         topic,
         reelDuration: duration,
         type: generationType,
         category: "motivation",
+        renderMode,
+        language,
+        voiceGender,
+        enableVoice,
+        enableSubtitles,
       });
       if (res.data.success) {
         setCurrentJob(res.data.jobs[0]);
@@ -139,12 +195,41 @@ export default function PromptToVideo() {
 
   const handleUpload = async () => {
     if (!currentJob) return;
+    // Check auth first
+    if (!ytConnected) {
+      try {
+        const authRes = await axios.get(`${API}/api/youtube/auth`);
+        if (authRes.data?.authUrl) {
+          window.open(authRes.data.authUrl, "_blank", "width=500,height=650");
+          showToast("info", "🔑", "Complete YouTube login in the popup, then click Upload again.");
+          return;
+        }
+      } catch { /* fall through to upload attempt */ }
+    }
     setUploading(true);
     try {
       const res = await axios.post(`${API}/api/jobs/${currentJob.id}/upload`);
-      if (res.data.success) showToast("success", "📤", "Uploaded to YouTube!");
+      if (res.data.success) {
+        setYoutubeUrl(res.data.youtubeUrl);
+        setUploadDone(true);
+        setYtConnected(true);
+        showToast("success", "🎉", "Uploaded to YouTube Shorts!");
+      }
     } catch (err) {
-      showToast("error", "✕", "Upload failed: " + (err.response?.data?.message || err.message));
+      const msg = err.response?.data?.message || err.message || "Upload failed";
+      // If it's an auth error, open the auth flow
+      if (msg.toLowerCase().includes("auth") || msg.toLowerCase().includes("token") || err.response?.status === 401) {
+        try {
+          const authRes = await axios.get(`${API}/api/youtube/auth`);
+          if (authRes.data?.authUrl) {
+            window.open(authRes.data.authUrl, "_blank", "width=500,height=650");
+            showToast("info", "🔑", "Connect your YouTube account in the popup, then upload again.");
+            setYtConnected(false);
+            return;
+          }
+        } catch { /* ignore */ }
+      }
+      showToast("error", "✕", "Upload failed: " + msg);
     } finally { setUploading(false); }
   };
 
@@ -244,8 +329,9 @@ export default function PromptToVideo() {
           <label style={{ fontSize: 11, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8, display: "block" }}>Generation Mode</label>
           <div style={{ display: "flex", gap: 8 }}>
             {[
-              { id: "REEL", label: "🎬 Full Cinematic Reel", sub: "Voice + Music + FX + Subtitles" },
-              { id: "PROMPT_TO_VIDEO", label: "⚡ Raw B-Roll Clip", sub: "Silent Video Only" },
+              { id: "REEL", label: "🎬 Full Cinematic Reel", sub: "Voice + Music + Subtitles" },
+              { id: "CINEMATIC", label: "🎥 Cinematic Video", sub: "Pure Kling V3 Direct (No Voice/Subs)" },
+              { id: "PROMPT_TO_VIDEO", label: "⚡ Raw B-Roll Clip", sub: "Single Silent Clip Only" },
             ].map(m => (
               <button
                 key={m.id}
@@ -264,6 +350,36 @@ export default function PromptToVideo() {
             ))}
           </div>
         </div>
+
+        {/* ── VISUAL SOURCING MODE ─────────────────────────────────────────────── */}
+        {generationType === "REEL" && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ fontSize: 11, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8, display: "block" }}>
+              Visual Asset Sourcing
+            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {[
+                { id: "ai_video", label: "🎨 AI Art Synthesis", sub: "SDXL Generation + Ken Burns" },
+                { id: "stock", label: "📦 Premium Stock Media", sub: "Pexels Context Sourcing" },
+              ].map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => setRenderMode(m.id)}
+                  style={{
+                    flex: 1, padding: "12px 16px", borderRadius: 12, cursor: "pointer",
+                    border: renderMode === m.id ? "1px solid var(--accent)" : "1px solid var(--border)",
+                    background: renderMode === m.id ? "var(--accent-soft)" : "var(--surface2)",
+                    color: renderMode === m.id ? "var(--accent)" : "var(--text2)",
+                    fontSize: 13, fontWeight: 700, textAlign: "left", fontFamily: "inherit", transition: "all 0.18s",
+                  }}
+                >
+                  <div style={{ marginBottom: 2 }}>{m.label}</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, color: renderMode === m.id ? "var(--accent)" : "var(--text3)" }}>{m.sub}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── DURATION ───────────────────────────────────────────────────── */}
         <div style={{ marginBottom: 24 }}>
@@ -285,7 +401,145 @@ export default function PromptToVideo() {
           </div>
         </div>
 
+        {/* ── LANGUAGE & VOICE SELECTION ─────────────────────────────────── */}
+        {generationType === "REEL" && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8, display: "block" }}>
+                Script Language
+              </label>
+              <select
+                value={language}
+                onChange={e => setLanguage(e.target.value)}
+                style={{
+                  width: "100%", background: "var(--surface2)",
+                  border: "1px solid var(--border)", borderRadius: 12, padding: "12px 16px",
+                  color: "var(--text)", fontSize: 13, fontWeight: 700, outline: "none",
+                  fontFamily: "inherit", cursor: "pointer", transition: "border-color 0.2s",
+                  boxSizing: "border-box", height: "46px",
+                }}
+                onFocus={e => e.target.style.borderColor = "rgba(99,102,241,0.5)"}
+                onBlur={e => e.target.style.borderColor = "var(--border)"}
+              >
+                <option value="en-US">🇺🇸 English (US)</option>
+                <option value="hi-IN">🇮🇳 Hindi (हिंदी)</option>
+                <option value="es-ES">🇪🇸 Spanish (Español)</option>
+                <option value="fr-FR">🇫🇷 French (Français)</option>
+                <option value="de-DE">🇩🇪 German (Deutsch)</option>
+                <option value="pt-BR">🇧🇷 Portuguese (Português)</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8, display: "block" }}>
+                Voice Gender
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[
+                  { id: "male", label: "👨 Male Voice" },
+                  { id: "female", label: "👩 Female Voice" },
+                ].map(g => (
+                  <button
+                    key={g.id}
+                    onClick={() => setVoiceGender(g.id)}
+                    style={{
+                      flex: 1, height: "46px", padding: "12px 14px", borderRadius: 12, cursor: "pointer",
+                      border: voiceGender === g.id ? "1px solid var(--accent)" : "1px solid var(--border)",
+                      background: voiceGender === g.id ? "var(--accent-soft)" : "var(--surface2)",
+                      color: voiceGender === g.id ? "var(--accent)" : "var(--text2)",
+                      fontSize: 13, fontWeight: 700, fontFamily: "inherit", transition: "all 0.18s",
+                    }}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── CINEMATIC OPTIONS ────────────────────────────────────────────── */}
+        {generationType === "REEL" && (
+          <div style={{ marginBottom: 24 }}>
+            <label style={{ fontSize: 11, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10, display: "block" }}>
+              🎬 Cinematic Options
+            </label>
+            <div style={{ display: "flex", gap: 10 }}>
+
+              {/* Voice toggle */}
+              <button
+                onClick={() => setEnableVoice(v => !v)}
+                style={{
+                  flex: 1, padding: "13px 16px", borderRadius: 12, cursor: "pointer",
+                  border: enableVoice ? "1px solid rgba(99,102,241,0.6)" : "1px solid var(--border)",
+                  background: enableVoice ? "var(--accent-soft)" : "var(--surface2)",
+                  color: enableVoice ? "var(--accent)" : "var(--text3)",
+                  fontFamily: "inherit", transition: "all 0.18s",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}
+              >
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>🎙️ Voice Narration</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{enableVoice ? "ElevenLabs AI voice" : "Silent — no audio"}</div>
+                </div>
+                <div style={{
+                  width: 38, height: 20, borderRadius: 10, transition: "background 0.2s",
+                  background: enableVoice ? "var(--accent)" : "rgba(120,120,140,0.35)",
+                  position: "relative", flexShrink: 0,
+                }}>
+                  <div style={{
+                    position: "absolute", top: 2, left: enableVoice ? 20 : 2,
+                    width: 16, height: 16, borderRadius: "50%", background: "#fff",
+                    transition: "left 0.2s", boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
+                  }} />
+                </div>
+              </button>
+
+              {/* Subtitles toggle */}
+              <button
+                onClick={() => setEnableSubtitles(s => !s)}
+                style={{
+                  flex: 1, padding: "13px 16px", borderRadius: 12, cursor: "pointer",
+                  border: enableSubtitles ? "1px solid rgba(99,102,241,0.6)" : "1px solid var(--border)",
+                  background: enableSubtitles ? "var(--accent-soft)" : "var(--surface2)",
+                  color: enableSubtitles ? "var(--accent)" : "var(--text3)",
+                  fontFamily: "inherit", transition: "all 0.18s",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}
+              >
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>📝 Subtitles</div>
+                  <div style={{ fontSize: 10, fontWeight: 500, opacity: 0.8 }}>{enableSubtitles ? "Burned-in captions" : "No text overlay"}</div>
+                </div>
+                <div style={{
+                  width: 38, height: 20, borderRadius: 10, transition: "background 0.2s",
+                  background: enableSubtitles ? "var(--accent)" : "rgba(120,120,140,0.35)",
+                  position: "relative", flexShrink: 0,
+                }}>
+                  <div style={{
+                    position: "absolute", top: 2, left: enableSubtitles ? 20 : 2,
+                    width: 16, height: 16, borderRadius: "50%", background: "#fff",
+                    transition: "left 0.2s", boxShadow: "0 1px 4px rgba(0,0,0,0.3)",
+                  }} />
+                </div>
+              </button>
+
+            </div>
+            {!enableVoice && !enableSubtitles && (
+              <div style={{ marginTop: 8, padding: "8px 12px", background: "rgba(168,85,247,0.08)", borderRadius: 8, border: "1px solid rgba(168,85,247,0.2)", fontSize: 11, color: "#a855f7", fontWeight: 600 }}>
+                🎬 Pure Cinematic Mode — visual-only, no voice, no text overlay
+              </div>
+            )}
+            {!enableVoice && enableSubtitles && (
+              <div style={{ marginTop: 8, padding: "8px 12px", background: "rgba(99,102,241,0.08)", borderRadius: 8, border: "1px solid rgba(99,102,241,0.2)", fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>
+                📝 Silent + Subtitles — captions will use the script text directly
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── ACTIONS ────────────────────────────────────────────────────── */}
+
         <div style={{ display: "flex", gap: 10 }}>
           <motion.button
             whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
@@ -460,20 +714,225 @@ export default function PromptToVideo() {
         <AnimatePresence>
           {generatedVideo && (
             <motion.div
-              initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              style={{ marginTop: 20 }}
+              initial={{ opacity: 0, y: 16, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10 }}
+              transition={{ type: "spring", stiffness: 260, damping: 26 }}
+              style={{ marginTop: 24 }}
             >
-              <div style={{ borderRadius: 16, overflow: "hidden", border: "1px solid var(--border)", background: "#000" }}>
-                <video src={`${API}/${generatedVideo}`} controls autoPlay loop style={{ width: "100%", maxHeight: 400 }} />
+              {/* Video player */}
+              <div style={{
+                borderRadius: 20, overflow: "hidden",
+                border: "1px solid rgba(99,102,241,0.3)",
+                background: "#000",
+                boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+                position: "relative",
+              }}>
+                <video
+                  src={`${API}/${generatedVideo}`}
+                  controls autoPlay loop
+                  style={{ width: "100%", maxHeight: 420, display: "block" }}
+                />
+                {/* Completed badge */}
+                <div style={{
+                  position: "absolute", top: 12, left: 12,
+                  padding: "4px 10px", borderRadius: 20,
+                  background: "rgba(16,185,129,0.9)",
+                  backdropFilter: "blur(8px)",
+                  fontSize: 11, fontWeight: 800, color: "#fff",
+                  display: "flex", alignItems: "center", gap: 5,
+                  letterSpacing: "0.04em",
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fff", display: "inline-block" }} />
+                  VIDEO READY
+                </div>
               </div>
-              <motion.button
-                whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                onClick={handleUpload}
-                disabled={uploading}
-                style={{ width: "100%", marginTop: 12, padding: 14, borderRadius: 12, border: "none", background: "var(--red)", color: "#fff", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}
+
+              {/* YouTube Upload Panel */}
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.15 }}
+                style={{
+                  marginTop: 16,
+                  borderRadius: 18,
+                  overflow: "hidden",
+                  border: uploadDone
+                    ? "1px solid rgba(16,185,129,0.4)"
+                    : "1px solid rgba(255,0,0,0.25)",
+                  background: uploadDone
+                    ? "linear-gradient(135deg, rgba(16,185,129,0.08), rgba(5,150,105,0.04))"
+                    : "linear-gradient(135deg, rgba(255,0,0,0.07), rgba(200,30,30,0.03))",
+                }}
               >
-                {uploading ? "📤 Uploading..." : "🔴 Upload to YouTube Shorts"}
-              </motion.button>
+                {/* Panel header */}
+                <div style={{
+                  padding: "12px 18px",
+                  borderBottom: uploadDone
+                    ? "1px solid rgba(16,185,129,0.15)"
+                    : "1px solid rgba(255,0,0,0.12)",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {/* YouTube icon */}
+                    <div style={{
+                      width: 28, height: 28, borderRadius: 8,
+                      background: uploadDone ? "#10b981" : "#ff0000",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 14,
+                    }}>
+                      {uploadDone ? "✓" : "▶"}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: uploadDone ? "#10b981" : "#ff4444" }}>
+                        {uploadDone ? "Published to YouTube Shorts!" : "Upload to YouTube Shorts"}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 1 }}>
+                        {ytConnected === false
+                          ? "⚠ YouTube not connected — click Upload to authorize"
+                          : ytConnected === true
+                          ? "✅ YouTube connected · OAuth2 active"
+                          : "Checking connection..."
+                        }
+                      </div>
+                    </div>
+                  </div>
+                  {/* YT connection pill */}
+                  <div style={{
+                    padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+                    background: ytConnected ? "rgba(16,185,129,0.15)" : "rgba(255,100,50,0.15)",
+                    color: ytConnected ? "#10b981" : "#fb923c",
+                    border: `1px solid ${ytConnected ? "rgba(16,185,129,0.3)" : "rgba(255,100,50,0.3)"}`,
+                  }}>
+                    {ytConnected ? "CONNECTED" : ytConnected === false ? "NOT CONNECTED" : "CHECKING"}
+                  </div>
+                </div>
+
+                <div style={{ padding: "14px 18px" }}>
+
+                  {/* ── SUCCESS STATE ── */}
+                  {uploadDone && youtubeUrl ? (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      style={{ display: "flex", flexDirection: "column", gap: 10 }}
+                    >
+                      <div style={{
+                        padding: "12px 16px",
+                        background: "rgba(16,185,129,0.1)",
+                        borderRadius: 12,
+                        border: "1px solid rgba(16,185,129,0.25)",
+                        display: "flex", alignItems: "center", gap: 10,
+                      }}>
+                        <div style={{ fontSize: 22 }}>🎉</div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: "#10b981", marginBottom: 2 }}>
+                            Your Short is LIVE on YouTube!
+                          </div>
+                          <a
+                            href={youtubeUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              fontSize: 12, color: "var(--accent)",
+                              textDecoration: "none", fontWeight: 600,
+                              wordBreak: "break-all",
+                            }}
+                          >
+                            {youtubeUrl}
+                          </a>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <motion.a
+                          whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                          href={youtubeUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{
+                            flex: 2, padding: "11px 16px", borderRadius: 12, border: "none",
+                            background: "linear-gradient(135deg, #ff0000, #cc0000)",
+                            color: "#fff", fontWeight: 700, cursor: "pointer",
+                            fontSize: 13, textDecoration: "none",
+                            display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                            boxShadow: "0 4px 20px rgba(255,0,0,0.3)",
+                          }}
+                        >
+                          ▶ Open on YouTube
+                        </motion.a>
+                        <motion.button
+                          whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+                          onClick={() => navigator.clipboard.writeText(youtubeUrl).then(() => showToast("success", "📋", "Link copied!"))}
+                          style={{
+                            flex: 1, padding: "11px", borderRadius: 12,
+                            border: "1px solid var(--border)", background: "transparent",
+                            color: "var(--text2)", fontWeight: 600, cursor: "pointer",
+                            fontFamily: "inherit", fontSize: 13,
+                          }}
+                        >
+                          📋 Copy Link
+                        </motion.button>
+                      </div>
+                    </motion.div>
+                  ) : (
+                    /* ── UPLOAD BUTTON ── */
+                    <motion.button
+                      whileHover={uploading ? {} : { scale: 1.02, boxShadow: "0 6px 30px rgba(255,0,0,0.5)" }}
+                      whileTap={uploading ? {} : { scale: 0.98 }}
+                      onClick={handleUpload}
+                      disabled={uploading}
+                      style={{
+                        width: "100%", padding: "15px", borderRadius: 14, border: "none",
+                        background: uploading
+                          ? "rgba(255,0,0,0.4)"
+                          : "linear-gradient(135deg, #ff0000, #cc0000)",
+                        color: "#fff", fontWeight: 800, cursor: uploading ? "default" : "pointer",
+                        fontFamily: "inherit", fontSize: 14,
+                        display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                        boxShadow: uploading ? "none" : "0 4px 24px rgba(255,0,0,0.35)",
+                        transition: "all 0.2s",
+                        letterSpacing: "0.02em",
+                      }}
+                    >
+                      {uploading ? (
+                        <>
+                          <motion.span
+                            animate={{ rotate: 360 }}
+                            transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }}
+                            style={{ display: "inline-block", fontSize: 16 }}
+                          >
+                            ⏳
+                          </motion.span>
+                          Uploading to YouTube...
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ fontSize: 18 }}>▶</span>
+                          {ytConnected === false ? "Connect YouTube & Upload" : "Upload to YouTube Shorts"}
+                        </>
+                      )}
+                    </motion.button>
+                  )}
+
+                  {/* Download fallback */}
+                  <motion.a
+                    whileHover={{ scale: 1.01 }}
+                    href={`${API}/${generatedVideo}`}
+                    download
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                      marginTop: 10, padding: "10px", borderRadius: 12,
+                      border: "1px solid var(--border)", background: "transparent",
+                      color: "var(--text3)", fontWeight: 600, fontSize: 12,
+                      textDecoration: "none", transition: "color 0.2s",
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.color = "var(--text)"}
+                    onMouseLeave={e => e.currentTarget.style.color = "var(--text3)"}
+                  >
+                    ⬇ Download MP4 instead
+                  </motion.a>
+                </div>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>

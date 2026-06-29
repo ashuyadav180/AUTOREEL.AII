@@ -6,8 +6,10 @@ import AnalyticsView from "./AnalyticsView";
 import ProfileView from "./ProfileView";
 import SystemHealthView from "./SystemHealthView";
 import Settings from "./Settings";
+import ApiStatusPanel from "./ApiStatusPanel";
 import { useToast } from "../context/ToastContext";
 import { useSocket } from "../hooks/useSocket";
+
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
 axios.defaults.withCredentials = true;
@@ -40,6 +42,66 @@ const UsageProgressBar = ({ percent }) => {
   );
 };
 
+/* ── Compact API quick-status widget for sidebar ─────────────────────────── */
+function ApiQuickStatus({ onOpenFull }) {
+  const [status, setStatus] = React.useState(null);
+
+  React.useEffect(() => {
+    const check = async () => {
+      try {
+        const r = await axios.get(`${API}/api/ai/health`, { timeout: 4000 });
+        setStatus(r.data?.services || null);
+      } catch { setStatus(null); }
+    };
+    check();
+    const t = setInterval(check, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const items = status ? [
+    { id: "gemini",     label: "Gemini",      s: status.gemini?.status },
+    { id: "claude",     label: "Claude",       s: status.claude?.status },
+    { id: "openai",     label: "ChatGPT",      s: status.openai?.status },
+    { id: "runway",     label: "RunwayML",     s: status.runway?.status },
+    { id: "elevenlabs", label: "ElevenLabs",   s: status.elevenlabs?.status },
+    { id: "pexels",     label: "Pexels",       s: status.pexels?.status },
+  ] : [];
+
+  const col = (s) => s === "active" || s === "configured" ? "#22c55e" : s === "error" || s === "offline" ? "#ef4444" : s === "no_key" ? "#555" : "#f97316";
+
+  return (
+    <div
+      onClick={onOpenFull}
+      style={{
+        background: "#16161E", borderRadius: 14, padding: "12px 14px", marginBottom: 16,
+        border: "1px solid #2A2A3A", cursor: "pointer", transition: "border-color 0.2s",
+      }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = "#6366f1"}
+      onMouseLeave={e => e.currentTarget.style.borderColor = "#2A2A3A"}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: "#888", letterSpacing: "0.06em" }}>API STATUS</span>
+        <span style={{ fontSize: 10, color: "#6366f1", fontWeight: 700 }}>View all →</span>
+      </div>
+      {!status && (
+        <div style={{ fontSize: 11, color: "#555", textAlign: "center", padding: "4px 0" }}>Checking APIs…</div>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {items.map(it => (
+          <div key={it.id} style={{
+            display: "flex", alignItems: "center", gap: 4,
+            padding: "3px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+            background: `${col(it.s)}15`, border: `1px solid ${col(it.s)}30`, color: col(it.s),
+          }}>
+            <div style={{ width: 5, height: 5, borderRadius: "50%", background: col(it.s) }} />
+            {it.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [page, setPage] = useState('studio');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -59,6 +121,28 @@ export default function Dashboard() {
 
   const { connected: socketConnected, lastUpdate } = useSocket();
 
+  // ── PromptToVideo Shared/Persistent Studio State ──
+  const [studioDuration, setStudioDuration] = useState(60);
+  const [studioPrompt, setStudioPrompt] = useState("");
+  const [studioSuggestions, setStudioSuggestions] = useState([]);
+  const [studioLoading, setStudioLoading] = useState(false);
+  const [studioEnhancing, setStudioEnhancing] = useState(false);
+  const [studioSuggesting, setStudioSuggesting] = useState(false);
+  const [studioGenerationType, setStudioGenerationType] = useState("REEL");
+  const [studioRenderMode, setStudioRenderMode] = useState("ai_video");
+  const [studioLanguage, setStudioLanguage] = useState("en-US");
+  const [studioVoiceGender, setStudioVoiceGender] = useState("male");
+  const [studioCurrentJob, setStudioCurrentJob] = useState(null);
+  const [studioGeneratedVideo, setStudioGeneratedVideo] = useState(null);
+  const [studioUploading, setStudioUploading] = useState(false);
+  const [studioYoutubeUrl, setStudioYoutubeUrl] = useState(null);
+  const [studioUploadDone, setStudioUploadDone] = useState(false);
+  const [studioYtConnected, setStudioYtConnected] = useState(null);
+  const [studioEnableVoice, setStudioEnableVoice] = useState(true);
+  const [studioEnableSubtitles, setStudioEnableSubtitles] = useState(true);
+  const [studioScriptPreview, setStudioScriptPreview] = useState(null);
+  const [studioShowPreview, setStudioShowPreview] = useState(false);
+
   // Apply real-time socket job patches to local state
   useEffect(() => {
     if (!lastUpdate) return;
@@ -70,12 +154,31 @@ export default function Dashboard() {
           ? { ...j, percent: lastUpdate.percent, currentStep: lastUpdate.currentStep, status: lastUpdate.status || j.status }
           : j
       ));
+
+      // Update studio active job progress even when user is on another tab
+      if (studioCurrentJob && (jobId === studioCurrentJob.id || lastUpdate.id === studioCurrentJob.id || lastUpdate.jobId === studioCurrentJob.id)) {
+        setStudioCurrentJob(prev => prev ? { ...prev, ...lastUpdate } : null);
+      }
     } else if (type === 'update') {
       // Status change (COMPLETED, FAILED, CANCELLED, RUNNING) — refresh full list
       fetchJobs();
       fetchStats();
+
+      if (studioCurrentJob && (jobId === studioCurrentJob.id || lastUpdate.id === studioCurrentJob.id || lastUpdate.jobId === studioCurrentJob.id)) {
+        setStudioCurrentJob(prev => {
+          if (!prev) return null;
+          const updated = { ...prev, ...lastUpdate };
+          if (updated.status === "COMPLETED") {
+            setStudioGeneratedVideo(updated.output?.video);
+            setStudioLoading(false);
+          } else if (updated.status === "FAILED" || updated.status === "CANCELLED") {
+            setStudioLoading(false);
+          }
+          return updated;
+        });
+      }
     }
-  }, [lastUpdate]);
+  }, [lastUpdate, studioCurrentJob]);
 
   // Close preview on Escape
   useEffect(() => {
@@ -245,8 +348,10 @@ export default function Dashboard() {
               { id: 'studio', label: 'Studio' }, 
               { id: 'analytics', label: 'Analytics' }, 
               { id: 'library', label: 'Library' }, 
+              { id: 'api-status', label: '🔌 API Status' },
               { id: 'system', label: 'System' }
             ].map(tab => (
+
               <button 
                 key={tab.id}
                 onClick={() => handleSetPage(tab.id)}
@@ -311,6 +416,10 @@ export default function Dashboard() {
             <button className={`nav-item ${page === 'system' ? 'active' : ''}`} onClick={() => handleSetPage('system')}>
               <span className="nav-icon">🛡️</span> System Health
             </button>
+            <button className={`nav-item ${page === 'api-status' ? 'active' : ''}`} onClick={() => handleSetPage('api-status')}>
+              <span className="nav-icon">🔌</span> API Status
+              <span className="nav-badge" style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>Live</span>
+            </button>
             <button className={`nav-item ${page === 'profile' ? 'active' : ''}`} onClick={() => handleSetPage('profile')}>
               <span className="nav-icon">👤</span> Profile
             </button>
@@ -344,6 +453,23 @@ export default function Dashboard() {
                 style={{ height: '100%', overflow: 'hidden' }}
               >
                 <SystemHealthView jobs={jobs} onRefreshJobs={fetchJobs} />
+              </motion.div>
+            )}
+
+            {page === 'api-status' && (
+              <motion.div
+                key="api-status-view"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+              >
+                <div style={{
+                  background: 'var(--surface, #16161E)', borderRadius: 20,
+                  border: '1px solid var(--border, #2A2A3A)', overflow: 'hidden',
+                  maxWidth: 860, margin: '0 auto',
+                }}>
+                  <ApiStatusPanel />
+                </div>
               </motion.div>
             )}
 
@@ -577,7 +703,28 @@ export default function Dashboard() {
                           ))}
                         </div>
         
-                        <PromptToVideo />
+                        <PromptToVideo
+                          duration={studioDuration} setDuration={setStudioDuration}
+                          prompt={studioPrompt} setPrompt={setStudioPrompt}
+                          suggestions={studioSuggestions} setSuggestions={setStudioSuggestions}
+                          loading={studioLoading} setLoading={setStudioLoading}
+                          enhancing={studioEnhancing} setEnhancing={setStudioEnhancing}
+                          suggesting={studioSuggesting} setSuggesting={setStudioSuggesting}
+                          generationType={studioGenerationType} setGenerationType={setStudioGenerationType}
+                          renderMode={studioRenderMode} setRenderMode={setStudioRenderMode}
+                          language={studioLanguage} setLanguage={setStudioLanguage}
+                          voiceGender={studioVoiceGender} setVoiceGender={setStudioVoiceGender}
+                          currentJob={studioCurrentJob} setCurrentJob={setStudioCurrentJob}
+                          generatedVideo={studioGeneratedVideo} setGeneratedVideo={setStudioGeneratedVideo}
+                          uploading={studioUploading} setUploading={setStudioUploading}
+                          youtubeUrl={studioYoutubeUrl} setYoutubeUrl={setStudioYoutubeUrl}
+                          uploadDone={studioUploadDone} setUploadDone={setStudioUploadDone}
+                          ytConnected={studioYtConnected} setYtConnected={setStudioYtConnected}
+                          enableVoice={studioEnableVoice} setEnableVoice={setStudioEnableVoice}
+                          enableSubtitles={studioEnableSubtitles} setEnableSubtitles={setStudioEnableSubtitles}
+                          scriptPreview={studioScriptPreview} setScriptPreview={setStudioScriptPreview}
+                          showPreview={studioShowPreview} setShowPreview={setStudioShowPreview}
+                        />
                     </>
                 )}
               </motion.div>
@@ -585,12 +732,15 @@ export default function Dashboard() {
           </AnimatePresence>
         </main>
 
-        {page !== 'system' && page !== 'profile' && (
+        {page !== 'system' && page !== 'profile' && page !== 'api-status' && (
           <aside className="jobs-panel" style={{ background: '#0F0F14', borderLeft: '1px solid #1A1A24', padding: '24px 16px', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
                <h2 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>Jobs <span style={{ color: '#888', fontSize: '14px', fontWeight: '500' }}>{jobs.length}</span></h2>
                <button className="refresh-btn" onClick={fetchJobs} style={{ background: '#16161E' }}>↻</button>
             </div>
+
+            {/* Compact API Quick-Status */}
+            <ApiQuickStatus onOpenFull={() => handleSetPage('api-status')} />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
               {jobs.map(j => {
@@ -614,13 +764,11 @@ export default function Dashboard() {
                           {j.status === 'COMPLETED' && downloadUrl && (
                               <a href={downloadUrl} download className="btn-dl" style={{ color: '#22c55e', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', padding: '6px 12px', fontSize: '11px', textDecoration: 'none', borderRadius: '8px' }}>⬇ Download</a>
                           )}
-                          {(j.status === 'FAILED' || j.status === 'PAUSED' || j.status === 'PENDING' || j.status === 'CANCELLED') && (
-                              <>
-                                <button onClick={() => handleResumeJob(j.id)} className="btn-resume" style={{ color: '#6366f1', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', padding: '6px 12px', fontSize: '11px', borderRadius: '8px', cursor: 'pointer' }}>▶ Resume</button>
-                                {j.status !== 'CANCELLED' && (
-                                  <button onClick={() => handleCancelJob(j.id)} className="btn-cancel" style={{ color: '#ef4444', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 12px', fontSize: '11px', borderRadius: '8px', cursor: 'pointer' }}>⏹ Cancel</button>
-                                )}
-                              </>
+                          {(j.status === 'FAILED' || j.status === 'PAUSED' || j.status === 'CANCELLED') && (
+                              <button onClick={() => handleResumeJob(j.id)} className="btn-resume" style={{ color: '#6366f1', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', padding: '6px 12px', fontSize: '11px', borderRadius: '8px', cursor: 'pointer' }}>▶ Resume</button>
+                          )}
+                          {(j.status === 'RUNNING' || j.status === 'PENDING' || j.status === 'FAILED' || j.status === 'PAUSED') && (
+                              <button onClick={() => handleCancelJob(j.id)} className="btn-cancel" style={{ color: '#ef4444', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', padding: '6px 12px', fontSize: '11px', borderRadius: '8px', cursor: 'pointer' }}>⏹ Cancel</button>
                           )}
                           <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#555', alignSelf: 'center' }}>{new Date(j.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
 

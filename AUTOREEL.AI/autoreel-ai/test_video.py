@@ -14,7 +14,7 @@ payload = {
 
 try:
     print("Requesting video generation...")
-    r = requests.post("http://localhost:8004/generate-video", json=payload)
+    r = requests.post("http://127.0.0.1:8014/generate-video", json=payload)
     print(json.dumps(r.json(), indent=2))
 except Exception as e:
     print(e)

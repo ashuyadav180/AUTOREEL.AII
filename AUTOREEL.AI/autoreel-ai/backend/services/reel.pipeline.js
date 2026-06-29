@@ -15,9 +15,24 @@
 
 import axios from "axios";
 import path from "path";
+import fs from "fs";
 import { generateTitleAndHashtags } from "./gemini.service.js";
 import storage from "./storage.service.js";
 const { uploadFile, getAbsPath } = storage;
+
+// ── Provider log helper ────────────────────────────────────────────────────
+const PROVIDER_LOG = path.join(process.cwd(), "storage", "provider_log.json");
+const logProviders = (jobId, providers) => {
+  try {
+    const existing = fs.existsSync(PROVIDER_LOG)
+      ? JSON.parse(fs.readFileSync(PROVIDER_LOG, "utf-8"))
+      : { jobs: [] };
+    existing.jobs = [{ jobId, providers, timestamp: new Date().toISOString() }, ...existing.jobs].slice(0, 50);
+    fs.mkdirSync(path.dirname(PROVIDER_LOG), { recursive: true });
+    fs.writeFileSync(PROVIDER_LOG, JSON.stringify(existing, null, 2));
+  } catch { /* non-critical */ }
+};
+
 
 // ── AI Service URLs ────────────────────────────────────────────────────────
 const SCRIPT_AI   = process.env.SCRIPT_AI_URL   || "http://127.0.0.1:8005";
@@ -43,13 +58,15 @@ const STEPS = [
  */
 export const runReelPipeline = async (
   topic,
-  category     = "motivation",
-  language     = "en-US",
-  voiceGender  = "male",
-  reelDuration = 60,
+  category       = "motivation",
+  language       = "en-US",
+  voiceGender    = "male",
+  reelDuration   = 60,
   checkCancelled = async () => false,
   onProgress     = () => {},
-  renderMode     = "ai_video"
+  renderMode     = "ai_video",
+  enableVoice    = true,
+  enableSubtitles = true
 ) => {
   const progress = (stepIdx, extraPercent = null) => {
     const s = STEPS[stepIdx];
@@ -58,6 +75,7 @@ export const runReelPipeline = async (
   };
 
   try {
+    const targetSceneCount = Math.max(4, Math.min(7, Math.round((reelDuration || 60) / 10)));
     // ─────────────────────────────────────────────────────────────────────
     // STAGE 1: Script — Gemini Flash
     // ─────────────────────────────────────────────────────────────────────
@@ -67,7 +85,7 @@ export const runReelPipeline = async (
 
     const scriptRes = await axios.post(`${SCRIPT_AI}/generate-script`, {
       topic, category, duration: reelDuration, language,
-    }, { timeout: 30000 });
+    }, { timeout: 120000 });
 
     if (!scriptRes.data.success) throw new Error(`Stage 1 Script AI: ${scriptRes.data.message}`);
 
@@ -92,14 +110,16 @@ export const runReelPipeline = async (
     console.log(`\n🧠 [Stage 2] Scene Planner (Claude Sonnet)...`);
 
     let scenes = [];
+    let sceneProvider = "none";
     try {
       const planRes = await axios.post(`${SCRIPT_AI}/plan-scenes`, {
-        script, topic, category, num_scenes: 7,
-      }, { timeout: 30000 });
+        script, topic, category, num_scenes: targetSceneCount,
+      }, { timeout: 120000 });
 
       if (planRes.data.success && planRes.data.scenes?.length > 0) {
         scenes = planRes.data.scenes;
-        console.log(`✅ [Stage 2] ${scenes.length} scenes planned by ${planRes.data.provider || "Claude"}`);
+        sceneProvider = planRes.data.provider || "claude";
+        console.log(`✅ [Stage 2] ${scenes.length} scenes planned by ${sceneProvider}`);
       }
     } catch (e) {
       console.warn(`⚠️ [Stage 2] Scene planning failed, using script directly: ${e.message}`);
@@ -137,37 +157,51 @@ export const runReelPipeline = async (
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // STAGE 5: Voice — ElevenLabs
+    // STAGE 5: Voice — ElevenLabs (skip if voice disabled)
     // ─────────────────────────────────────────────────────────────────────
     if (await checkCancelled()) throw new Error("CANCELLED");
     progress(4);
-    console.log(`\n🎙️ [Stage 5] Voice | lang=${language} | gender=${voiceGender}`);
 
-    const voiceRes = await axios.post(`${VOICE_AI}/generate-voice`, {
-      text: script, language, gender: voiceGender,
-    }, { timeout: 60000 });
+    let audioPath = null;
+    let voiceProvider = "none";
 
-    if (!voiceRes.data.success) throw new Error(`Stage 5 Voice AI: ${voiceRes.data.message}`);
-    const rawAudioPath = voiceRes.data.audio_path;
-    const audioPath = await uploadFile(getAbsPath(rawAudioPath), "audio");
-    const voiceProvider = voiceRes.data.provider || "elevenlabs";
-    console.log(`✅ [Stage 5] Voice [${voiceProvider}]: ${audioPath}`);
+    if (enableVoice) {
+      console.log(`\n🎙️ [Stage 5] Voice | lang=${language} | gender=${voiceGender}`);
+      const voiceRes = await axios.post(`${VOICE_AI}/generate-voice`, {
+        text: script, language, gender: voiceGender,
+      }, { timeout: 60000 });
+
+      if (!voiceRes.data.success) throw new Error(`Stage 5 Voice AI: ${voiceRes.data.message}`);
+      const rawAudioPath = voiceRes.data.audio_path;
+      audioPath = await uploadFile(getAbsPath(rawAudioPath), "audio");
+      voiceProvider = voiceRes.data.provider || "elevenlabs";
+      console.log(`✅ [Stage 5] Voice [${voiceProvider}]: ${audioPath}`);
+    } else {
+      console.log(`\n🔇 [Stage 5] Voice SKIPPED (enableVoice=false) — silent video`);
+      voiceProvider = "skipped";
+    }
 
     // ─────────────────────────────────────────────────────────────────────
-    // STAGE 6: Subtitles — Whisper
+    // STAGE 6: Subtitles — Whisper (skip if subtitles disabled)
     // ─────────────────────────────────────────────────────────────────────
     if (await checkCancelled()) throw new Error("CANCELLED");
     progress(5);
-    console.log(`\n📝 [Stage 6] Subtitles...`);
 
-    const subRes = await axios.post(`${SUBTITLE_AI}/transcribe`, {
-      audio_path: audioPath,
-    }, { timeout: 30000 });
+    let subtitlePath = null;
 
-    if (!subRes.data.success) throw new Error(`Stage 6 Subtitle AI: ${subRes.data.message}`);
-    const rawSubtitlePath = subRes.data.subtitle_path;
-    const subtitlePath = await uploadFile(getAbsPath(rawSubtitlePath), "subtitles");
-    console.log(`✅ [Stage 6] Subtitles: ${path.basename(subtitlePath)}`);
+    if (enableSubtitles && audioPath) {
+      console.log(`\n📝 [Stage 6] Subtitles...`);
+      const subRes = await axios.post(`${SUBTITLE_AI}/transcribe`, {
+        audio_path: audioPath,
+      }, { timeout: 120000 });
+
+      if (!subRes.data.success) throw new Error(`Stage 6 Subtitle AI: ${subRes.data.message}`);
+      const rawSubtitlePath = subRes.data.subtitle_path;
+      subtitlePath = await uploadFile(getAbsPath(rawSubtitlePath), "subtitles");
+      console.log(`✅ [Stage 6] Subtitles: ${path.basename(subtitlePath)}`);
+    } else {
+      console.log(`\n💬 [Stage 6] Subtitles SKIPPED (enableSubtitles=${enableSubtitles}, hasAudio=${!!audioPath})`);
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // STAGE 4 + 7: RunwayML img2video + FFmpeg Render
@@ -187,11 +221,11 @@ export const runReelPipeline = async (
 
       const renderRes = await axios.post(`${VIDEO_AI}/render-full`, {
         images: generatedImages,
-        audio_path: getAbsPath(audioPath),
-        subtitle_path: getAbsPath(subtitlePath),
+        audio_path: audioPath ? getAbsPath(audioPath) : null,
+        subtitle_path: subtitlePath ? getAbsPath(subtitlePath) : null,
         category,
         topic,
-        caption_style: "tiktok",
+        caption_style: subtitlePath ? "tiktok" : "none",
       }, { timeout: 3600000 }); // 60 min — 7 Runway clips take time
 
       if (!renderRes.data?.success) {
@@ -209,10 +243,10 @@ export const runReelPipeline = async (
 
       const videoRes = await axios.post(`${VIDEO_AI}/generate-video`, {
         topic, category,
-        audio_path:    audioPath,
-        subtitle_path: subtitlePath,
+        audio_path:    audioPath || null,
+        subtitle_path: subtitlePath || null,
         template:      category,
-        caption_style: "tiktok",
+        caption_style: subtitlePath ? "tiktok" : "none",
         layout:        "full",
         render_mode:   "stock",
         script,
@@ -233,6 +267,16 @@ export const runReelPipeline = async (
     // ─────────────────────────────────────────────────────────────────────
     // COMPLETE: Return result
     // ─────────────────────────────────────────────────────────────────────
+    // Record which providers were used for this job
+    const usedProviders = {
+      script:  scriptRes.data.provider || "gemini",
+      scenes:  sceneProvider,
+      images:  hasImages ? `pollinations+sdxl (${generatedImages.filter(i => i.image_path).length}/${scenes.length})` : "skipped",
+      voice:   voiceProvider,
+      video:   hasImages ? "runway+ffmpeg" : "pexels+ffmpeg",
+    };
+    logProviders(topic.slice(0, 40), usedProviders);
+
     return {
       script,
       hook,
@@ -247,6 +291,7 @@ export const runReelPipeline = async (
       description,
       category,
       language,
+      providersUsed: usedProviders,
     };
 
   } catch (err) {
@@ -254,3 +299,4 @@ export const runReelPipeline = async (
     throw err;
   }
 };
+

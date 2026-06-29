@@ -9,6 +9,7 @@ import uploadService from "../services/youtube.service.js";
 const { uploadVideo } = uploadService;
 
 const VIDEO_AI_URL = process.env.VIDEO_AI_URL || "http://127.0.0.1:8004";
+const SCRIPT_AI_URL = process.env.SCRIPT_AI_URL || "http://127.0.0.1:8005";
 const CREDITS_PATH = "storage/credits.json";
 
 /**
@@ -20,8 +21,20 @@ const deductRunwayCredit = () => {
     try {
         if (!fs.existsSync(CREDITS_PATH)) return;
         const data = JSON.parse(fs.readFileSync(CREDITS_PATH, "utf-8"));
-        data.runway.used += 1;
-        data.runway.lastUpdated = new Date().toISOString();
+        
+        if (process.env.FAL_API_KEY || (process.env.KLING_ACCESS_KEY && process.env.KLING_SECRET_KEY)) {
+            if (!data.kling) {
+                data.kling = { used: 0, total: 100, lastUpdated: "" };
+            }
+            data.kling.used += 1;
+            data.kling.lastUpdated = new Date().toISOString();
+            console.log("Worker: Deducted Kling AI credit");
+        } else {
+            data.runway.used += 1;
+            data.runway.lastUpdated = new Date().toISOString();
+            console.log("Worker: Deducted RunwayML credit");
+        }
+        
         fs.writeFileSync(CREDITS_PATH, JSON.stringify(data, null, 2));
     } catch (e) { console.error("Worker: Failed to deduct credit:", e); }
 };
@@ -35,6 +48,8 @@ async function start() {
     try {
         if (job.type === "PROMPT_TO_VIDEO") {
             await runPromptToVideoJob(job);
+        } else if (job.type === "CINEMATIC") {
+            await runCinematicJob(job);
         } else {
             await runStandardJob(job);
         }
@@ -68,11 +83,20 @@ async function runStandardJob(job) {
              return false; 
         },
         onProgress,
-        job.renderMode || "stock"
+        job.renderMode || "ai_video",
+        job.enableVoice !== false,
+        job.enableSubtitles !== false
     );
 
-    // YouTube Upload logic
-    if (result.video) {
+    if (result.videoRel) {
+        result.video = result.videoRel;
+    }
+
+    parentPort.postMessage({ type: "completed", result });
+
+    // Upload after completion so a slow/auth-blocked YouTube request never
+    // leaves the rendered video stuck in the generation state.
+    if (result.video && job.autoUpload !== false && !job.isMock) {
         const CATEGORY_TAGS = {
             motivation:      ["motivation", "mindset", "discipline", "success", "shorts", "viral"],
             storytelling:    ["story", "inspiration", "transformation", "shorts", "viral"],
@@ -82,29 +106,28 @@ async function runStandardJob(job) {
         };
         const tags = CATEGORY_TAGS[result.category] || ["shorts", "viral", "motivation"];
 
-        if (!job.isMock) {
-            try {
-                parentPort.postMessage({ type: "progress", data: { currentStep: "Uploading to YouTube", percent: 98 } });
+        try {
+            parentPort.postMessage({ type: "progress", data: { currentStep: "Uploading to YouTube", percent: 100 } });
 
-                const uploadResult = await uploadVideo({
-                    videoPath:   result.video,
-                    title:       result.title,
-                    description: result.description,
-                    tags,
-                });
+            const uploadResult = await uploadVideo({
+                videoPath:   result.video,
+                title:       result.title,
+                description: result.description,
+                tags,
+            });
 
-                result.youtubeId  = uploadResult.id;
-                result.youtubeUrl = `https://youtu.be/${uploadResult.id}`;
-                
-                parentPort.postMessage({ type: "youtube", data: { youtubeId: result.youtubeId, youtubeUrl: result.youtubeUrl } });
-            } catch (uploadErr) {
-                console.error("Worker: YouTube upload failed:", uploadErr.message);
-                result.uploadError = uploadErr.message;
-            }
+            parentPort.postMessage({
+                type: "youtube",
+                data: {
+                    youtubeId: uploadResult.id,
+                    youtubeUrl: `https://youtu.be/${uploadResult.id}`,
+                }
+            });
+        } catch (uploadErr) {
+            console.error("Worker: YouTube upload failed:", uploadErr.message);
+            parentPort.postMessage({ type: "youtube_failed", error: uploadErr.message });
         }
     }
-
-    parentPort.postMessage({ type: "completed", result });
 }
 
 async function runPromptToVideoJob(job) {
@@ -132,6 +155,63 @@ async function runPromptToVideoJob(job) {
     };
 
     parentPort.postMessage({ type: "progress", data: { currentStep: "Finalizing clip...", percent: 90 } });
+    parentPort.postMessage({ type: "completed", result });
+}
+
+async function runCinematicJob(job) {
+    const jobId = job.id;
+
+    parentPort.postMessage({ type: "progress", data: { currentStep: "Initializing cinematic pipeline...", percent: 10 } });
+    parentPort.postMessage({ type: "progress", data: { currentStep: "Planning cinematic scenes...", percent: 20 } });
+
+    // Step 1: plan-scenes on Script AI
+    const sceneCount = job.reelDuration <= 15 ? 3 : job.reelDuration <= 30 ? 5 : 8;
+    const scenePlanRes = await axios.post(`${SCRIPT_AI_URL}/plan-scenes`, {
+      script: job.topic,
+      topic: job.topic,
+      category: job.category || "storytelling",
+      num_scenes: sceneCount
+    }, { timeout: 120000 });
+
+    if (!scenePlanRes.data.success) {
+      throw new Error("Scene planning failed");
+    }
+
+    const scenes = scenePlanRes.data.scenes;
+    parentPort.postMessage({ type: "progress", data: { currentStep: `Generating ${sceneCount} cinematic clips via Kling V3...`, percent: 40 } });
+
+    // Step 2: generate-cinematic-clip on Video AI
+    const videoRes = await axios.post(`${VIDEO_AI_URL}/generate-cinematic-clip`, {
+      scenes: scenes.map((s, i) => ({
+        index: i,
+        text: s.text || "",
+        visual: s.imagePrompt || s.visual || job.topic,
+        mood: s.mood || "inspiring",
+        hero: i === 0
+      })),
+      category: job.category || "storytelling",
+      topic: job.topic,
+      duration: job.reelDuration || 30
+    }, { timeout: 1800000 }); // 30 min timeout
+
+    if (!videoRes.data.success) {
+        throw new Error(videoRes.data.message || "Cinematic video generation failed");
+    }
+
+    // Deduct credits:
+    for (let i = 0; i < scenes.length; i++) {
+        deductRunwayCredit();
+    }
+
+    const result = {
+        video: videoRes.data.video_path,
+        thumbnail: videoRes.data.thumbnail_path,
+        title: job.topic.substring(0, 50),
+        description: `Cinematic AI video for: ${job.topic}`,
+        category: job.category || "storytelling"
+    };
+
+    parentPort.postMessage({ type: "progress", data: { currentStep: "Finalizing video...", percent: 90 } });
     parentPort.postMessage({ type: "completed", result });
 }
 

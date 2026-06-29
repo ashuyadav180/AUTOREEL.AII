@@ -7,10 +7,11 @@ dotenv.config();
 
 // Configuration for services
 const services = [
-    { name: "script_ai", port: 8000, path: "ai-services/script_ai" },
-    { name: "voice_ai", port: 8001, path: "ai-services/voice_ai" },
-    { name: "video_ai", port: 8002, path: "ai-services/video_ai" },
+    { name: "script_ai", port: 8015, path: "ai-services/script_ai" },
+    { name: "voice_ai", port: 8012, path: "ai-services/voice_ai" },
     { name: "subtitle_ai", port: 8003, path: "ai-services/subtitle_ai" },
+    { name: "image_ai", port: 8006, path: "ai-services/image_ai" },
+    { name: "video_ai", port: 8014, path: "ai-services/video_ai" },
 ];
 
 const findRoot = () => {

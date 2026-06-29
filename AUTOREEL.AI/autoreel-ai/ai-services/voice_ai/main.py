@@ -1,8 +1,8 @@
-﻿"""
-Voice AI â€” AutoReel.ai (Vid.AI Quality Upgrade)
-Priority: ElevenLabs API (premium, natural voice) â†’ Edge TTS (free fallback)
+"""
+Voice AI â€” AutoReel.ai
+Priority: Edge TTS (free, fast) â†’ ElevenLabs (paid fallback for premium quality)
 
-Set ELEVENLABS_API_KEY in backend/.env to enable premium voices.
+Set ELEVENLABS_API_KEY in backend/.env to enable premium voice generation.
 """
 
 from fastapi import FastAPI, APIRouter
@@ -15,9 +15,8 @@ import edge_tts
 
 router = APIRouter()
 app = FastAPI(title="Voice AI", version="2.0")
-app.include_router(router)
 
-# â”€â”€â”€ ENV SETUP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” ENV SETUP â€”â€”â€”
 def _load_backend_env():
     env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", ".env"))
     if not os.path.exists(env_path):
@@ -39,11 +38,11 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_ENABLED = bool(ELEVENLABS_API_KEY)
 
 if ELEVENLABS_ENABLED:
-    print("[OK] ElevenLabs voice enabled (premium quality)")
+    print("[OK] ElevenLabs voice enabled (primary)")
 else:
-    print("[INFO] ElevenLabs not configured - using Edge TTS (free). Add ELEVENLABS_API_KEY to backend/.env to upgrade.")
+    print("[INFO] ElevenLabs not configured - using Edge TTS only (free).")
 
-# â”€â”€â”€ MODELS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” MODELS â€”â€”â€”
 
 class VoiceRequest(BaseModel):
     text: str = Field(..., min_length=10)
@@ -58,27 +57,25 @@ class VoiceResponse(BaseModel):
     error_code: str | None = None
     message: str | None = None
 
-# â”€â”€â”€ PATHS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” PATHS â€”â€”â€”
 
 BASE_DIR  = os.path.dirname(__file__)
 AUDIO_DIR = os.path.normpath(os.path.join(BASE_DIR, "..", "..", "backend", "storage", "audio"))
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# â”€â”€â”€ ELEVENLABS VOICES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# High-quality pre-made voices by language + gender
-# Browse all voices at: https://elevenlabs.io/voice-library
+# â€”â€”â€” ELEVENLABS VOICES (paid fallback) â€”â€”â€”
 ELEVENLABS_VOICES = {
     "en-US": {
-        "male":   "nPczCjzI2devNBz1zQrb",   # Brian â€” deep, authoritative American
-        "female": "EXAVITQu4vr4xnSDxMaL",   # Bella â€” clear, warm American female
+        "male":   "nPczCjzI2devNBz1zQrb",   # Brian
+        "female": "EXAVITQu4vr4xnSDxMaL",   # Bella
     },
     "en-GB": {
-        "male":   "CYw3kZ02Hs0563khs1Fj",   # Dave â€” British male
-        "female": "ThT5KcBeYPX3keUQqHPh",   # Dorothy â€” British female
+        "male":   "CYw3kZ02Hs0563khs1Fj",   # Dave
+        "female": "ThT5KcBeYPX3keUQqHPh",   # Dorothy
     },
     "hi-IN": {
-        "male":   "YOUR_HINDI_MALE_VOICE_ID",    # Replace with Indian Male Voice ID
-        "female": "6V9kz8WiEZCuxIP4zw8F",  # User's chosen Hindi female Voice ID
+        "male":   "nPczCjzI2devNBz1zQrb",  # Brian (Multilingual v2)
+        "female": "6V9kz8WiEZCuxIP4zw8F",  # Swara Neural fallback
     },
 }
 
@@ -89,7 +86,7 @@ def get_elevenlabs_voice_id(language: str, gender: str) -> str:
     voice_id = lang_voices.get(gender)
     return voice_id or ELEVENLABS_DEFAULT_VOICE
 
-# â”€â”€â”€ EDGE TTS VOICES (FREE FALLBACK) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” EDGE TTS VOICES (FREE PRIMARY) â€”â€”â€”
 EDGE_TTS_VOICE_MAP = {
     "en-US": {"male": "en-US-ChristopherNeural",  "female": "en-US-JennyNeural"},
     "en-GB": {"male": "en-GB-RyanNeural",         "female": "en-GB-SoniaNeural"},
@@ -106,11 +103,11 @@ EDGE_TTS_VOICE_MAP = {
 }
 DEFAULT_EDGE_VOICE = "en-US-ChristopherNeural"
 
-# â”€â”€â”€ GENERATION FUNCTIONS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” GENERATION FUNCTIONS â€”â€”â€”
 
 def generate_with_elevenlabs(text: str, voice_id: str, output_path: str) -> bool:
     """
-    Generate voice using ElevenLabs API.
+    Generate voice using ElevenLabs API (paid fallback).
     Returns True on success, False on failure.
     """
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -121,23 +118,23 @@ def generate_with_elevenlabs(text: str, voice_id: str, output_path: str) -> bool
     }
     payload = {
         "text": text,
-        "model_id": "eleven_turbo_v2",        # fast + high quality
+        "model_id": "eleven_turbo_v2",
         "voice_settings": {
-            "stability":        0.50,          # 0=expressive, 1=stable
-            "similarity_boost": 0.80,          # voice clarity
-            "style":            0.35,          # expressiveness (0-1)
+            "stability":        0.50,
+            "similarity_boost": 0.80,
+            "style":            0.35,
             "use_speaker_boost": True,
         }
     }
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        session = requests.Session()
+        session.trust_env = False
+        resp = session.post(url, json=payload, headers=headers, timeout=30)
         if resp.status_code == 200:
-            # ElevenLabs returns MP3
             mp3_path = output_path.replace(".wav", ".mp3")
             with open(mp3_path, "wb") as f:
                 f.write(resp.content)
-            # Return the mp3 path by renaming â€” downstream handles both
             os.replace(mp3_path, output_path.replace(".wav", ".mp3"))
             return True
         else:
@@ -147,17 +144,17 @@ def generate_with_elevenlabs(text: str, voice_id: str, output_path: str) -> bool
         print(f"[WARN] ElevenLabs request failed: {e}")
         return False
 
-# â”€â”€â”€ HEALTH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” HEALTH â€”â€”â€”
 
 @router.get("/health")
 def health():
     return {
         "status": "ok",
-        "elevenlabs": ELEVENLABS_ENABLED,
-        "provider": "elevenlabs" if ELEVENLABS_ENABLED else "edge_tts",
+        "primary": "elevenlabs" if ELEVENLABS_ENABLED else "edge_tts",
+        "fallback": "edge_tts" if ELEVENLABS_ENABLED else "none",
     }
 
-# â”€â”€â”€ ENDPOINT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â€”â€”â€” ENDPOINT â€”â€”â€”
 
 @router.post("/generate-voice")
 async def generate_voice(data: VoiceRequest):
@@ -165,15 +162,14 @@ async def generate_voice(data: VoiceRequest):
         import re
         if re.search(r'[\u0900-\u097F]', data.text):
             data.language = "hi-IN"
-            
+
         gender = data.gender.lower() if data.gender in ("male", "female") else "male"
         timestamp = int(time.time())
 
-        # Try ElevenLabs first if configured
+        # TIER 1: ElevenLabs (premium quality)
         if ELEVENLABS_ENABLED:
-            voice_id  = get_elevenlabs_voice_id(data.language, gender)
-            # Check if ElevenLabs supports this language (None means use Edge TTS)
-            lang_map  = ELEVENLABS_VOICES.get(data.language, {})
+            voice_id = get_elevenlabs_voice_id(data.language, gender)
+            lang_map = ELEVENLABS_VOICES.get(data.language, {})
             has_voice = lang_map.get(gender) is not None
 
             if has_voice:
@@ -190,25 +186,36 @@ async def generate_voice(data: VoiceRequest):
                         "voice":      voice_id,
                         "provider":   "elevenlabs",
                     }
-                else:
-                    print("[WARN] ElevenLabs failed, falling back to Edge TTS")
 
-        # Edge TTS fallback
-        lang_voices = EDGE_TTS_VOICE_MAP.get(data.language, EDGE_TTS_VOICE_MAP["en-US"])
-        edge_voice  = lang_voices.get(gender, DEFAULT_EDGE_VOICE)
+            print("[WARN] ElevenLabs unavailable, falling back to Edge TTS")
 
-        filename_wav  = f"voice_{timestamp}.wav"
-        audio_path_wav = os.path.join(AUDIO_DIR, filename_wav)
+        # TIER 2: Edge TTS (free fallback)
+        try:
+            lang_voices = EDGE_TTS_VOICE_MAP.get(data.language, EDGE_TTS_VOICE_MAP["en-US"])
+            edge_voice = lang_voices.get(gender, DEFAULT_EDGE_VOICE)
 
-        communicate = edge_tts.Communicate(data.text, edge_voice)
-        await communicate.save(audio_path_wav)
+            filename_mp3 = f"voice_{timestamp}.mp3"
+            audio_path_mp3 = os.path.join(AUDIO_DIR, filename_mp3)
 
-        print(f"[OK] Edge TTS voice: {filename_wav} ({edge_voice})")
+            communicate = edge_tts.Communicate(data.text, edge_voice)
+            await communicate.save(audio_path_mp3)
+
+            if os.path.exists(audio_path_mp3) and os.path.getsize(audio_path_mp3) > 1000:
+                print(f"[OK] Edge TTS voice (fallback): {filename_mp3} ({edge_voice})")
+                return {
+                    "success":    True,
+                    "audio_path": f"storage/audio/{filename_mp3}",
+                    "voice":      edge_voice,
+                    "provider":   "edge_tts",
+                }
+            else:
+                print("[WARN] Edge TTS output too small")
+        except Exception as edge_err:
+            print(f"[WARN] Edge TTS failed ({edge_err})")
         return {
-            "success":    True,
-            "audio_path": f"storage/audio/{filename_wav}",
-            "voice":      edge_voice,
-            "provider":   "edge_tts",
+            "success":    False,
+            "error_code": "VOICE_GEN_FAILED",
+            "message":    "Both Edge TTS and ElevenLabs failed",
         }
 
     except Exception as e:
@@ -217,3 +224,7 @@ async def generate_voice(data: VoiceRequest):
             "error_code": "VOICE_GEN_FAILED",
             "message":    str(e),
         }
+
+
+app.include_router(router)
+

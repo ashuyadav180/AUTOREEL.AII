@@ -12,11 +12,11 @@ import { runJob } from "../jobs/job.engine.js";
 const DAILY_JOB_LIMIT = 50;
 
 const AI_SERVICES = [
-  "http://127.0.0.1:8001/health",
-  "http://127.0.0.1:8002/health",
-  "http://127.0.0.1:8003/health",
-  "http://127.0.0.1:8004/health",
-];
+  process.env.SCRIPT_AI_URL || "http://127.0.0.1:8005",
+  process.env.VOICE_AI_URL || "http://127.0.0.1:8002",
+  process.env.SUBTITLE_AI_URL || "http://127.0.0.1:8003",
+  process.env.VIDEO_AI_URL || "http://127.0.0.1:8004",
+].map((baseUrl) => `${baseUrl.replace(/\/$/, "")}/health`);
 
 const DEFAULT_TOPICS_BY_CATEGORY = {
   motivation: ["discipline", "success mindset", "mental toughness", "self improvement", "confidence"],

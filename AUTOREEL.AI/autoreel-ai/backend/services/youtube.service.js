@@ -17,6 +17,15 @@ const TOKEN_PATH = path.join(
   "youtube.oauth.json"
 );
 
+const sanitizeYoutubeTitle = (title = "") => {
+  const cleaned = String(title)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const safe = cleaned || "AI Generated Short";
+  return safe.length > 95 ? `${safe.slice(0, 92).trim()}...` : safe;
+};
+
 // ---------- Load Credentials ----------
 let credentials = null;
 let oauth2Client = null;
@@ -127,6 +136,7 @@ const uploadVideo = async ({ videoPath, title, description, tags = [] }) => {
 
   // Ensure token is valid before uploading
   await ensureFreshToken();
+  const safeTitle = sanitizeYoutubeTitle(title);
 
   console.log(`🚀 Starting YouTube Upload: "${title}"`);
   console.log(`   📁 File: ${videoPath}`);
@@ -141,7 +151,7 @@ const uploadVideo = async ({ videoPath, title, description, tags = [] }) => {
     part: "snippet,status",
     requestBody: {
       snippet: {
-        title,
+        title: safeTitle,
         description,
         categoryId: "22",  // People & Blogs
         tags: allTags,

@@ -56,7 +56,7 @@ app.use("/storage", express.static("storage"));
 /* ---------- RATE LIMIT ---------- */
 const limiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 500, // Limit each IP to 500 requests per window
+  max: 100000, // Limit each IP to 100000 requests per window to prevent local testing lockouts
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again after 5 minutes." },

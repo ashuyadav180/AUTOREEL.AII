@@ -23,17 +23,17 @@ PlayResY: 1920
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 
-Style: HOOK_VIRAL,Impact,130,&H00000000,&H000000FF,&H0000FFFF,&HA0000000,1,0,3,14,0,5,60,60,0,1
-Style: BODY_VIRAL,Impact,110,&H00000000,&H000000FF,&H0000FFFF,&HA0000000,1,0,3,14,0,5,80,80,0,1
-Style: CTA_VIRAL,Impact,90,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,1,6,2,5,80,80,0,1
+Style: HOOK_VIRAL,Montserrat,130,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,1,8,0,5,60,60,0,1
+Style: BODY_VIRAL,Montserrat,110,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,1,8,0,5,80,80,0,1
+Style: CTA_VIRAL,Montserrat,90,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,1,6,2,5,80,80,0,1
 
-Style: HOOK_CLEAN,Impact,130,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,1,6,2,5,60,60,0,1
-Style: BODY_CLEAN,Impact,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,1,6,2,5,80,80,0,1
-Style: CTA_CLEAN,Impact,88,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,1,5,2,5,80,80,0,1
+Style: HOOK_CLEAN,Montserrat,130,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,1,8,0,5,60,60,0,1
+Style: BODY_CLEAN,Montserrat,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,1,8,0,5,80,80,0,1
+Style: CTA_CLEAN,Montserrat,88,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,1,6,0,5,80,80,0,1
 
-Style: HOOK_TIKTOK,Impact,130,&H00FFFFFF,&H000000FF,&H000000FF,&H00000000,1,0,1,8,3,5,60,60,0,1
-Style: BODY_TIKTOK,Impact,110,&H00FFFFFF,&H000000FF,&H000000FF,&H00000000,1,0,1,8,3,5,80,80,0,1
-Style: CTA_TIKTOK,Impact,88,&H0000FFFF,&H000000FF,&H000000FF,&H00000000,1,0,1,6,3,5,80,80,0,1
+Style: HOOK_TIKTOK,Montserrat,130,&H00FFFFFF,&H000000FF,&H000000FF,&H00000000,1,0,1,8,0,5,60,60,0,1
+Style: BODY_TIKTOK,Montserrat,110,&H00FFFFFF,&H000000FF,&H000000FF,&H00000000,1,0,1,8,0,5,80,80,0,1
+Style: CTA_TIKTOK,Montserrat,88,&H0000FFFF,&H000000FF,&H000000FF,&H00000000,1,0,1,6,0,5,80,80,0,1
 
 Style: HOOK_HALKU,Arial Black,110,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,1,0,3,10,0,8,60,60,100,1
 Style: BODY_HALKU,Arial Black,90,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,1,0,3,10,0,8,80,80,100,1
@@ -254,7 +254,7 @@ def generate_animated_ass(srt_path: str, ass_path: str, caption_style: str = "vi
         # ── HOOK: Big animated entrance ────────────────────────────────
         if is_hook:
             style  = f"HOOK_{suffix}"
-            pos_y  = 960  # Center on split-screen line
+            pos_y  = 1440  # 75% down from 1920 height
             rot    = random.randint(-1, 1)
 
             emoji_words = []
@@ -295,7 +295,7 @@ def generate_animated_ass(srt_path: str, ass_path: str, caption_style: str = "vi
         # ── CTA: Pulsing scale animation + fade ────────────────────────
         if is_cta:
             style = f"CTA_{suffix}"
-            pos_y = 960  # Center on split-screen line
+            pos_y = 1440  # 75% down from 1920 height
             # Continuous slow pulse: grow then shrink
             pulse = (
                 r"\t(0," + str(dur_ms // 2) + r",\fscx112\fscy112)" +
@@ -330,8 +330,8 @@ def generate_animated_ass(srt_path: str, ass_path: str, caption_style: str = "vi
         chunks = chunk_words(words, size=1)  # 1-word-at-a-time for Vid.AI style
         chunk_dur = duration / max(len(chunks), 1)
 
-        # Organic Y variation: tight around 960 for split-screen focus
-        base_y = random.randint(940, 980)
+        # Organic Y variation: positioned at 75% down the screen
+        base_y = random.randint(1420, 1460)
 
         for ci, chunk_str in enumerate(chunks):
             chunk_words_list = chunk_str.split()

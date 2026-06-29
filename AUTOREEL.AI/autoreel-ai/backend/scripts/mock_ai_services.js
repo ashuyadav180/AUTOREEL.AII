@@ -7,9 +7,9 @@ const appVoice = express();
 const appVideo = express();
 const appSubtitle = express();
 
-const PORT_SCRIPT = 8000;
-const PORT_VOICE = 8001;
-const PORT_VIDEO = 8002;
+const PORT_SCRIPT = 8015;
+const PORT_VOICE = 8012;
+const PORT_VIDEO = 8014;
 const PORT_SUBTITLE = 8003;
 
 // Ensure storage dirs exist
@@ -23,6 +23,7 @@ if (!fs.existsSync(STORAGE_ROOT)) fs.mkdirSync(STORAGE_ROOT);
 
 // --- Script AI ---
 appScript.use(express.json());
+appScript.get("/health", (_req, res) => res.json({ status: "ok" }));
 appScript.post("/generate-script", (req, res) => {
     console.log("📝 [Script AI] Generating script for:", req.body.topic);
     res.json({
@@ -34,6 +35,7 @@ appScript.listen(PORT_SCRIPT, () => console.log(`🤖 Script AI running on ${POR
 
 // --- Voice AI ---
 appVoice.use(express.json());
+appVoice.get("/health", (_req, res) => res.json({ status: "ok" }));
 appVoice.post("/generate-voice", (req, res) => {
     console.log("🗣️ [Voice AI] Generating voice...");
     const filePath = "storage/audio/mock_voice.mp3";
@@ -48,6 +50,7 @@ appVoice.listen(PORT_VOICE, () => console.log(`🤖 Voice AI running on ${PORT_V
 
 // --- Subtitle AI ---
 appSubtitle.use(express.json());
+appSubtitle.get("/health", (_req, res) => res.json({ status: "ok" }));
 appSubtitle.post("/generate-subtitles", (req, res) => {
     console.log("📝 [Subtitle AI] Generating subtitles...");
     const filePath = "storage/subtitles/mock_subs.srt";
@@ -62,6 +65,7 @@ appSubtitle.listen(PORT_SUBTITLE, () => console.log(`🤖 Subtitle AI running on
 
 // --- Video AI ---
 appVideo.use(express.json());
+appVideo.get("/health", (_req, res) => res.json({ status: "ok" }));
 appVideo.post("/generate-video", (req, res) => {
     console.log("🎬 [Video AI] Generating video...");
     const filePath = "storage/video/mock_video.mp4";

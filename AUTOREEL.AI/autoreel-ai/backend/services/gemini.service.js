@@ -12,7 +12,7 @@ let model = null;
 if (GEMINI_API_KEY) {
     try {
         const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-        model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         geminiEnabled = true;
         console.log("✅ Gemini Title Generator enabled");
     } catch (err) {
@@ -97,7 +97,13 @@ Rules:
 
 function buildFallback(topic, cat, scriptExcerpt, hashtags) {
     const titleFn = FALLBACK_TITLES[cat] || FALLBACK_TITLES.motivation;
-    const title = titleFn(topic);
+    const cleanedTopic = String(topic || "AI Short")
+        .replace(/^create a cinematic 9:16 short-form video about\s+/i, "")
+        .split(", with ")[0]
+        .replace(/\s*\(v\d+\)\s*$/i, "")
+        .trim();
+    const titleTopic = cleanedTopic.length > 42 ? `${cleanedTopic.slice(0, 39).trim()}...` : cleanedTopic;
+    const title = titleFn(titleTopic);
     const excerpt = scriptExcerpt.slice(0, 100);
     return {
         title,

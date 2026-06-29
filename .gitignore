@@ -5,3 +5,10 @@ AUTOREEL.AI.zip
 .vscode/
 graphify-out/
 Project_Report.md
+
+# Ignore sensitive secrets
+AUTOREEL.AI/autoreel-ai/backend/config/client_secret.json
+AUTOREEL.AI/autoreel-ai/backend/config/youtube.oauth.json
+AUTOREEL.AI/autoreel-ai/update_keys.js
+AUTOREEL.AI/autoreel-ai/.env
+AUTOREEL.AI/autoreel-ai/backend/.env
