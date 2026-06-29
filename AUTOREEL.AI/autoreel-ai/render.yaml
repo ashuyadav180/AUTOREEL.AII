@@ -6,7 +6,7 @@ services:
   - type: web
     name: autoreel-ai-service
     env: docker
-    dockerContext: ai-services
+    dockerContext: AUTOREEL.AI/autoreel-ai/ai-services
     dockerfilePath: Dockerfile
     plan: free
     region: ohio
@@ -33,7 +33,7 @@ services:
     env: node
     plan: free
     region: ohio
-    rootDir: backend
+    rootDir: AUTOREEL.AI/autoreel-ai/backend
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
@@ -69,3 +69,5 @@ services:
         sync: false
       - key: S3_PUBLIC_URL
         sync: false
+
+
